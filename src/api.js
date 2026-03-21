@@ -480,6 +480,7 @@ export const PollenAPI = {
           tree: null,
           weed: null,
           riskLevel: 'Low',
+          status: safe(response?.status, null),
           vegetationIndex: null,
           ndvi: null,
           vegetationHealth: null,
@@ -585,6 +586,7 @@ export const PollenAPI = {
         tree,
         weed,
         riskLevel: normalizedRiskLevel,
+        status: safe(response?.status, null),
         vegetationIndex,
         ndvi: safe(ndviData?.ndvi, null),
         vegetationHealth: safe(ndviData?.health, null),
@@ -734,29 +736,58 @@ export const SoilAPI = {
 // 🌎 ECOSYSTEM SERVICE (NASA + GBIF)
 // ===============================
 export const EcosystemAPI = {
-  get: (lat, lon) =>
-    fetchWithRetry(async () => {
+  get: (lat, lon, options = {}) =>
+    withLocationCache(
+      'ecosystem',
+      lat,
+      lon,
+      () => fetchWithRetry(async () => {
       const response = await fetchWithTimeout(`/api/ecosystem?lat=${lat}&lng=${lon}`);
 
-      const vegetationIndexRaw = Number(response?.data?.vegetationIndex);
-      const biodiversityRaw = Number(response?.data?.biodiversityScore);
-      const forestRaw = Number(response?.data?.forestCoverage);
+      console.log('🌍 [EcosystemAPI] Server response:', response);
 
-      return {
-        vegetationIndex: Number.isFinite(vegetationIndexRaw)
-          ? Math.max(0, Math.min(1, vegetationIndexRaw))
-          : null,
-        ndvi: Number.isFinite(Number(response?.data?.ndvi)) ? Number(response.data.ndvi) : null,
-        biodiversityScore: Number.isFinite(biodiversityRaw)
-          ? Math.max(0, Math.min(100, Math.round(biodiversityRaw)))
-          : null,
-        biodiversityCount: Number.isFinite(Number(response?.data?.biodiversityCount))
-          ? Number(response.data.biodiversityCount)
-          : null,
-        forestCoverage: Number.isFinite(forestRaw)
-          ? Math.max(0, Math.min(100, Math.round(forestRaw)))
-          : null,
-        timestamp: safe(response?.data?.timestamp, null),
+      // Safely extract and validate data from response
+      const data = response?.data || {};
+      
+      const vegetationIndexRaw = Number(data.vegetationIndex);
+      const biodiversityRaw = Number(data.biodiversityScore);
+      const forestRaw = Number(data.forestCoverage);
+      const ndviRaw = Number(data.ndvi);
+
+      // Normalize vegetation index to 0-1 range (handles both formats)
+      const normalizedVegetationIndex = (() => {
+        if (!Number.isFinite(vegetationIndexRaw)) return null;
+        // Support both provider formats: NDVI ratio (0..1) and percentage (0..100).
+        if (vegetationIndexRaw >= 0 && vegetationIndexRaw <= 1) {
+          return Math.round(vegetationIndexRaw * 1000) / 1000;
+        }
+        if (vegetationIndexRaw > 1 && vegetationIndexRaw <= 100) {
+          return Math.round((vegetationIndexRaw / 100) * 1000) / 1000;
+        }
+        return null;
+      })();
+
+      // Validate and clamp biodiversity score to 0-100
+      const normalizedBiodiversityScore = (() => {
+        if (!Number.isFinite(biodiversityRaw)) return null;
+        return Math.max(0, Math.min(100, Math.round(biodiversityRaw)));
+      })();
+
+      // Validate and clamp forest coverage to 0-100
+      const normalizedForestCoverage = (() => {
+        if (!Number.isFinite(forestRaw)) return null;
+        return Math.max(0, Math.min(100, Math.round(forestRaw)));
+      })();
+
+      const result = {
+        vegetationIndex: normalizedVegetationIndex,
+        ndvi: Number.isFinite(ndviRaw) ? Math.round(ndviRaw * 1000) / 1000 : null,
+        biodiversityScore: normalizedBiodiversityScore,
+        biodiversityCount: Number.isFinite(Number(data.biodiversityCount)) ? Number(data.biodiversityCount) : null,
+        forestCoverage: normalizedForestCoverage,
+        forestPlantCount: Number.isFinite(Number(data.forestPlantCount)) ? Number(data.forestPlantCount) : null,
+        forestTotalCount: Number.isFinite(Number(data.forestTotalCount)) ? Number(data.forestTotalCount) : null,
+        timestamp: safe(data.timestamp, null),
         source: {
           ndvi: safe(response?.source?.ndvi, null),
           biodiversity: safe(response?.source?.biodiversity, null),
@@ -769,5 +800,14 @@ export const EcosystemAPI = {
         },
         details: safe(response?.details, null),
       };
+
+      console.log('🌍 [EcosystemAPI] Parsed result:', result);
+
+      return result;
     }),
+      {
+        force: Boolean(options?.force),
+        ttlMs: Number(options?.ttlMs) || 180000,
+      }
+    ),
 };

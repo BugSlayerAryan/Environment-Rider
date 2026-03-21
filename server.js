@@ -93,7 +93,8 @@ app.get('/health', (req, res) => {
 // 🌿 Pollen Proxy
 app.get('/api/pollen', async (req, res) => {
   try {
-    const { lat, lng } = req.query;
+    const { lat } = req.query;
+    const lng = req.query.lng ?? req.query.lon;
     
     if (!lat || !lng) {
       return res.status(400).json({ error: 'lat and lng required' });
@@ -120,8 +121,9 @@ app.get('/api/pollen', async (req, res) => {
 
     if (!response.ok) {
       const upstreamErrorText = await response.text();
-      // Return a soft-unavailable payload for known quota/rate scenarios to avoid noisy client fetch failures.
+      // Return a soft-unavailable payload for known quota/rate/coverage scenarios.
       if (response.status === 422 || response.status === 429) {
+        console.warn(`⚠️ Pollen upstream unavailable (status ${response.status}); serving soft-unavailable payload.`);
         return res.json({
           data: null,
           source: 'Ambee Pollen API',
@@ -550,8 +552,10 @@ app.get('/api/ecosystem', async (req, res) => {
 });
 
 const PORT = process.env.VITE_PROXY_PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`🚀 Proxy server running on http://localhost:${PORT}`);
-  console.log(`   Water API: http://localhost:${PORT}/api/water?lat=28.6139&lng=77.2090`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
+const HOST = process.env.VITE_PROXY_HOST || '127.0.0.1';
+
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Proxy server running on http://${HOST}:${PORT}`);
+  console.log(`   Water API: http://${HOST}:${PORT}/api/water?lat=28.6139&lng=77.2090`);
+  console.log(`   Health: http://${HOST}:${PORT}/health`);
 });

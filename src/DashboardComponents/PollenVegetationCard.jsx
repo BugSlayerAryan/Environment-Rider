@@ -61,6 +61,11 @@ const StatusBadge = ({ status, className = '' }) => {
       text: 'text-orange-700 dark:text-orange-200',
       label: 'High',
     },
+    unv: {
+      bg: 'bg-slate-100 dark:bg-slate-800',
+      text: 'text-slate-700 dark:text-slate-300',
+      label: 'UNV',
+    },
   }), []);
 
   const config = statusConfig[status?.toLowerCase()] || statusConfig.low;
@@ -194,6 +199,28 @@ const PollenVegetationCard = ({
 
   // Optimized data parsing
   const parsePollenResponse = useCallback((response) => {
+    const parseDetailsMessage = (details) => {
+      if (!details) return null;
+
+      if (typeof details === 'string') {
+        try {
+          const parsed = JSON.parse(details);
+          if (parsed && typeof parsed.message === 'string' && parsed.message.trim()) {
+            return parsed.message.trim();
+          }
+        } catch {
+          return details.trim() || null;
+        }
+        return details.trim() || null;
+      }
+
+      if (typeof details === 'object' && typeof details.message === 'string') {
+        return details.message.trim() || null;
+      }
+
+      return null;
+    };
+
     const toMetric = (value) => {
       if (value === null || value === undefined) return null;
       const numeric = Number(value);
@@ -203,23 +230,27 @@ const PollenVegetationCard = ({
     const grass = toMetric(response.grass);
     const tree = toMetric(response.tree);
     const weed = toMetric(response.weed);
-    const totalFromParts = [grass, tree, weed].every((v) => Number.isFinite(v)) 
-      ? grass + tree + weed 
+    const totalFromParts = [grass, tree, weed].every((v) => Number.isFinite(v))
+      ? grass + tree + weed
       : null;
-    
+
     const total = Number.isFinite(Number(response.pollenCount))
       ? Number(response.pollenCount)
       : totalFromParts;
 
     const hasPollenData = Number.isFinite(total);
+    const isUnavailable = response.pollenUnavailable || response.unavailable || false;
+    const unavailableReason = parseDetailsMessage(response.details);
+
     const riskLevel = hasPollenData
       ? (response.riskLevel || classifyRiskLevel(total))
-      : 'Low';
+      : (isUnavailable ? 'UNV' : 'Low');
 
     const hints = {
       Low: '✓ Good for outdoor activities',
       Moderate: '⚠ Mild allergy risk, consider precautions',
       High: '✕ High allergy risk, limit outdoor time',
+      UNV: 'Pollen data unavailable',
     };
 
     const vegetationMetric = response.vegetationIndex;
@@ -231,15 +262,19 @@ const PollenVegetationCard = ({
       hasPollenData,
       pollenCount: hasPollenData ? total : null,
       riskLevel,
-      healthHint: hasPollenData ? hints[riskLevel] : 'Live pollen data is temporarily unavailable',
+      healthHint: hasPollenData
+        ? hints[riskLevel]
+        : unavailableReason || (Number(response?.status) === 422
+          ? 'Pollen API usage limit reached. Showing vegetation-only fallback.'
+          : 'Live pollen data is temporarily unavailable'),
       pollenBreakdown: [
         { name: 'Grass', value: grass, ...BREAKDOWN_META.Grass },
         { name: 'Tree', value: tree, ...BREAKDOWN_META.Tree },
         { name: 'Weed', value: weed, ...BREAKDOWN_META.Weed },
       ],
       vegetationPercent: Number.isFinite(vegetationValue) ? vegetationValue : null,
-      isPollenUnavailable: response.pollenUnavailable || response.unavailable || false,
-      hasError: !hasPollenData && !Number.isFinite(vegetationValue) && !(response.pollenUnavailable || response.unavailable),
+      isPollenUnavailable: isUnavailable,
+      hasError: !hasPollenData && !Number.isFinite(vegetationValue) && !isUnavailable,
     };
   }, []);
 
@@ -298,6 +333,17 @@ const PollenVegetationCard = ({
         throw new Error('No pollen data received');
       }
 
+      // Debug: Log raw API response
+      console.log('🌿 Raw API response:', {
+        unavailable: response.unavailable,
+        pollenUnavailable: response.pollenUnavailable,
+        status: response.status,
+        details: response.details,
+        pollenCount: response.pollenCount,
+        vegetationIndex: response.vegetationIndex,
+        hasPollenData: response.pollenCount !== null && Number.isFinite(Number(response.pollenCount)),
+      });
+
       const parsedData = parsePollenResponse(response);
 
       // Cache the successful response
@@ -331,6 +377,14 @@ const PollenVegetationCard = ({
     const lon = Number(location?.lon);
 
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setIsLoading(false);
+      setHasError(false);
+      setHealthHint('Location coordinates are missing. Select a valid location.');
+      setPollenCount(null);
+      setPollenLevel('Low');
+      setPollenBreakdown([]);
+      setVegetationPercent(null);
+      setIsPollenUnavailable(false);
       return;
     }
 
@@ -417,8 +471,8 @@ const PollenVegetationCard = ({
     );
   }
 
-  // Error state
-  if (hasError) {
+  // Error state - only show for REAL errors, not unavailable data
+  if (hasError && !isPollenUnavailable) {
     return (
       <div 
         className={`rounded-2xl p-4 sm:p-6 shadow-lg border ${

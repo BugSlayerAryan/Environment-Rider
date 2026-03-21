@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Leaf, Trees, Globe, MoreHorizontal, TrendingUp, TrendingDown, Target, Activity } from 'lucide-react';
+import { Leaf, Trees, Globe, MoreHorizontal, TrendingUp, TrendingDown, Target, Activity, RefreshCw } from 'lucide-react';
 import { EcosystemAPI } from '../api';
 import EcosystemHealthCalculate from './EcosystemHealthCalculate';
 
@@ -93,7 +93,7 @@ const ProgressBar = ({ value, max = 100, showLabel = true, className = '', varia
 /**
  * CircularProgress - Circular progress indicator for metrics
  */
-const CircularProgress = ({ value, max = 1, label, color = 'emerald' }) => {
+const CircularProgress = ({ value, max = 1, label, color = 'emerald', isUnavailable = false }) => {
   const [animatedValue, setAnimatedValue] = useState(0);
 
   useEffect(() => {
@@ -202,7 +202,7 @@ const CircularProgress = ({ value, max = 1, label, color = 'emerald' }) => {
         {/* Center content with premium styling */}
         <div className="relative z-10 flex flex-col items-center justify-center text-center">
           <div className={`text-6xl font-black tracking-tighter leading-none ${config.numberText}`}>
-            {(animatedValue * 100).toFixed(0)}
+            {isUnavailable ? '--' : (animatedValue * 100).toFixed(0)}
           </div>
           <div className={`text-xs font-extrabold uppercase tracking-widest mt-2.5 opacity-90 ${config.labelText}`}>
             Score
@@ -304,13 +304,14 @@ const EcosystemMonitoringCard = ({
 }) => {
   const [animated] = useState(true);
   const [liveMetrics, setLiveMetrics] = useState({
-    vegetationIndex,
-    biodiversityScore,
-    forestCoverage,
+    vegetationIndex: vegetationIndex,
+    biodiversityScore: biodiversityScore,
+    forestCoverage: forestCoverage,
     locationLabel: null,
-    lastUpdated,
+    lastUpdated: 0,
   });
   const [isLoadingLive, setIsLoadingLive] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const lastAutoFetchKeyRef = useRef(null);
 
   useEffect(() => {
@@ -321,7 +322,8 @@ const EcosystemMonitoringCard = ({
       return;
     }
 
-    if (lastAutoFetchKeyRef.current === fetchKey) {
+    const isManualRefresh = refreshKey > 0;
+    if (!isManualRefresh && lastAutoFetchKeyRef.current === fetchKey) {
       return;
     }
     lastAutoFetchKeyRef.current = fetchKey;
@@ -341,26 +343,40 @@ const EcosystemMonitoringCard = ({
       }, 6000);
 
       try {
-        const liveData = await EcosystemAPI.get(lat, lon);
+        const liveData = await EcosystemAPI.get(lat, lon, { force: isManualRefresh });
         if (cancelled) return;
 
         clearTimeout(timeoutId);
+        
+        console.log('🌍 [EcosystemAPI] Raw response:', {
+          vegetationIndex: liveData?.vegetationIndex,
+          biodiversityScore: liveData?.biodiversityScore,
+          forestCoverage: liveData?.forestCoverage,
+          timestamp: liveData?.timestamp,
+          unavailable: liveData?.unavailable,
+        });
+
         const nowIso = new Date().toISOString();
         const timestamp = liveData?.timestamp || nowIso;
         const updatedAgoMins = Math.max(1, Math.round((Date.now() - new Date(timestamp).getTime()) / 60000));
 
-        setLiveMetrics({
-          vegetationIndex: Number.isFinite(Number(liveData?.vegetationIndex)) ? Number(liveData.vegetationIndex) : null,
-          biodiversityScore: Number.isFinite(Number(liveData?.biodiversityScore)) ? Number(liveData.biodiversityScore) : null,
-          forestCoverage: Number.isFinite(Number(liveData?.forestCoverage)) ? Number(liveData.forestCoverage) : null,
+        // Ensure all values are properly typed numbers
+        const processedMetrics = {
+          vegetationIndex: Number.isFinite(liveData?.vegetationIndex) ? liveData.vegetationIndex : null,
+          biodiversityScore: Number.isFinite(liveData?.biodiversityScore) ? liveData.biodiversityScore : null,
+          forestCoverage: Number.isFinite(liveData?.forestCoverage) ? liveData.forestCoverage : null,
           locationLabel: `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`,
           lastUpdated: Number.isFinite(updatedAgoMins) ? updatedAgoMins : 1,
-        });
+        };
+
+        console.log('🌍 [EcosystemMonitoring] Processed metrics:', processedMetrics);
+
+        setLiveMetrics(processedMetrics);
         setIsLoadingLive(false);
       } catch (error) {
         if (!cancelled) {
           clearTimeout(timeoutId);
-          console.warn('Ecosystem live metrics unavailable, using fallback values.', error);
+          console.error('❌ Ecosystem live metrics unavailable:', error);
           setIsLoadingLive(false);
         }
       }
@@ -372,11 +388,21 @@ const EcosystemMonitoringCard = ({
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [location?.lat, location?.lon]);
+  }, [location?.lat, location?.lon, refreshKey]);
 
-  const displayVegetationIndex = Number.isFinite(Number(liveMetrics.vegetationIndex)) ? Number(liveMetrics.vegetationIndex) : null;
-  const displayBiodiversityScore = Number.isFinite(Number(liveMetrics.biodiversityScore)) ? Number(liveMetrics.biodiversityScore) : null;
-  const displayForestCoverage = Number.isFinite(Number(liveMetrics.forestCoverage)) ? Number(liveMetrics.forestCoverage) : null;
+  const displayVegetationIndex = liveMetrics.vegetationIndex;
+  const displayBiodiversityScore = liveMetrics.biodiversityScore;
+  const displayForestCoverage = liveMetrics.forestCoverage;
+  
+  console.log('🌍 [Display Values]:', {
+    displayVegetationIndex,
+    displayBiodiversityScore,
+    displayForestCoverage,
+    liveMetricsVegetation: liveMetrics.vegetationIndex,
+    liveMetricsBiodiversity: liveMetrics.biodiversityScore,
+    liveMetricsForest: liveMetrics.forestCoverage,
+  });
+  
   const displayLocation =
     liveMetrics.locationLabel ||
     (Number.isFinite(Number(location?.lat)) && Number.isFinite(Number(location?.lon))
@@ -466,7 +492,7 @@ const EcosystemMonitoringCard = ({
                 <h3 className={`text-xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Ecosystem Monitoring</h3>
                 <p className={`text-xs font-medium mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                   {displayLocation}
-                  {Number.isFinite(Number(displayLastUpdated)) ? ` • Updated ${displayLastUpdated}m ago` : ''}
+                  {Number.isFinite(displayLastUpdated) && displayLastUpdated > 0 ? ` • Updated ${displayLastUpdated}m ago` : ''}
                 </p>
               </div>
             </div>
@@ -477,6 +503,17 @@ const EcosystemMonitoringCard = ({
             aria-label="Ecosystem monitoring card options"
           >
             <MoreHorizontal className="w-5 h-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setRefreshKey((prev) => prev + 1)}
+            disabled={actualLoading}
+            className={`ml-2 p-2 rounded-lg transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed ${
+              isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50' : 'text-slate-400 hover:text-emerald-700 hover:bg-emerald-50/80'
+            }`}
+            aria-label="Refresh ecosystem metrics"
+          >
+            <RefreshCw className={`w-4 h-4 ${actualLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
@@ -492,6 +529,7 @@ const EcosystemMonitoringCard = ({
               max={1}
               label="Vegetation Index (NDVI)"
               color="emerald"
+              isUnavailable={!Number.isFinite(displayVegetationIndex)}
             />
           </div>
 
@@ -502,6 +540,7 @@ const EcosystemMonitoringCard = ({
               max={1}
               label="Biodiversity Index"
               color="green"
+              isUnavailable={!Number.isFinite(displayBiodiversityScore)}
             />
           </div>
 
@@ -512,6 +551,7 @@ const EcosystemMonitoringCard = ({
               max={1}
               label="Forest Coverage"
               color="teal"
+              isUnavailable={!Number.isFinite(displayForestCoverage)}
             />
           </div>
         </div>

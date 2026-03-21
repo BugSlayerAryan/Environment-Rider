@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useEffect } from 'react';
 // eslint-disable-next-line no-unused-vars
 import { motion } from 'framer-motion';
 import {
@@ -368,6 +368,24 @@ const Dashboard = () => {
     lastUpdatedAt: null,
     hasResolved: false,
   });
+
+  useEffect(() => {
+    if (ecosystemSummary.hasResolved) return;
+
+    const timeoutId = setTimeout(() => {
+      setEcosystemSummary((prev) => {
+        if (prev.hasResolved) return prev;
+        return {
+          score: 0,
+          status: 'Unavailable',
+          lastUpdatedAt: new Date().toISOString(),
+          hasResolved: true,
+        };
+      });
+    }, 10000);
+
+    return () => clearTimeout(timeoutId);
+  }, [ecosystemSummary.hasResolved, weatherLocation.lat, weatherLocation.lon]);
 
   const handleLocationSelect = useCallback((coords) => {
     setWeatherLocation((prev) => {
