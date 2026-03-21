@@ -239,7 +239,7 @@ const PollenVegetationCard = ({
       ],
       vegetationPercent: Number.isFinite(vegetationValue) ? vegetationValue : null,
       isPollenUnavailable: response.pollenUnavailable || response.unavailable || false,
-      hasError: !hasPollenData && !Number.isFinite(vegetationValue),
+      hasError: !hasPollenData && !Number.isFinite(vegetationValue) && !(response.pollenUnavailable || response.unavailable),
     };
   }, []);
 

@@ -240,6 +240,7 @@ const SoilMonitoringCard = ({
           current: liveSoilData,
           previous: prev.current,
         }));
+        setIsLoading(false);
       } catch (fetchError) {
         if (cancelled) return;
 

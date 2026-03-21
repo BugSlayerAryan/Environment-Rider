@@ -453,6 +453,7 @@ export const PollenAPI = {
       
       try {
         response = await fetchWithTimeout(url);
+        pollenUnavailable = Boolean(response?.unavailable);
       } catch {
         pollenUnavailable = true;
         console.warn('⚠️ Pollen data unavailable, will try vegetation data');
@@ -540,8 +541,29 @@ export const PollenAPI = {
         : null;
       const total = parseMetric(record?.pollenCount, record?.totalPollen, componentTotal);
 
+      const ambeeVegetation = normalizeVegetationIndex(
+        parseMetric(record?.vegetationIndex, record?.ndvi, indexes?.ndvi)
+      );
+      const vegetationIndex = ndviData?.vegetationIndex ?? ambeeVegetation;
+
       if (!record || !hasAnyPollenMetric || total === null) {
-        throw new Error('Pollen API returned no usable pollen metrics');
+        return {
+          pollenCount: null,
+          grass: null,
+          tree: null,
+          weed: null,
+          riskLevel: 'Low',
+          vegetationIndex,
+          ndvi: safe(ndviData?.ndvi, null),
+          vegetationHealth: safe(ndviData?.health, null),
+          pollenUnavailable: true,
+          vegetationUnavailable: ndviData === null && ambeeVegetation === null,
+          timestamp: safe(response?.timestamp, null),
+          source: safe(response?.source, 'Ambee Pollen API'),
+          vegetationSource: safe(ndviData?.source, null),
+          unavailable: true,
+          details: safe(response?.details, 'Pollen API returned no usable pollen metrics'),
+        };
       }
 
       const derivedRiskLevel = Number.isFinite(total)
@@ -556,11 +578,6 @@ export const PollenAPI = {
         if (normalized.includes('low')) return 'Low';
         return derivedRiskLevel;
       })();
-
-      const ambeeVegetation = normalizeVegetationIndex(
-        parseMetric(record?.vegetationIndex, record?.ndvi, indexes?.ndvi)
-      );
-      const vegetationIndex = ndviData?.vegetationIndex ?? ambeeVegetation;
 
       return {
         pollenCount: Number.isFinite(total) ? total : null,
