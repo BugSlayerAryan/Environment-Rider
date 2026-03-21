@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Droplets, Thermometer, Leaf, AlertCircle, MoreHorizontal, TrendingUp, TrendingDown } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Droplets, Thermometer, Leaf, AlertCircle, MoreHorizontal, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 import { SoilAPI } from '../api';
 
 /**
- * StatusBadge - Reusable status indicator component
+ * StatusBadge - Reusable status indicator component 
  */
+
 const StatusBadge = ({ status, className = '' }) => {
   const statusConfig = {
     optimal: {
@@ -62,6 +63,21 @@ const StatusBadge = ({ status, className = '' }) => {
       text: 'text-emerald-700 dark:text-emerald-200',
       label: 'High',
     },
+    na: {
+      bg: 'bg-slate-100 dark:bg-slate-800',
+      text: 'text-slate-700 dark:text-slate-300',
+      label: 'N/A',
+    },
+    unv: {
+      bg: 'bg-red-100 dark:bg-red-900',
+      text: 'text-red-700 dark:text-red-200',
+      label: 'UNV',
+    },
+    nc: {
+      bg: 'bg-blue-100 dark:bg-blue-900',
+      text: 'text-blue-700 dark:text-blue-200',
+      label: 'NC',
+    },
   };
 
   const config = statusConfig[status?.toLowerCase()] || statusConfig.moderate;
@@ -74,51 +90,10 @@ const StatusBadge = ({ status, className = '' }) => {
 };
 
 /**
- * ProgressBar - Animated progress indicator
- */
-const ProgressBar = ({ value, max = 100, showLabel = true, className = '', color = 'blue' }) => {
-  const [animatedValue, setAnimatedValue] = useState(0);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setAnimatedValue(value), 100);
-    return () => clearTimeout(timer);
-  }, [value]);
-
-  const percentage = Math.min((animatedValue / max) * 100, 100);
-
-  const colorMap = {
-    blue: 'from-cyan-400 to-blue-500 dark:from-cyan-500 dark:to-blue-600',
-    green: 'from-emerald-400 to-green-500 dark:from-emerald-500 dark:to-green-600',
-    orange: 'from-amber-400 to-orange-500 dark:from-amber-500 dark:to-orange-600',
-    red: 'from-red-400 to-rose-500 dark:from-red-500 dark:to-rose-600',
-  };
-
-  return (
-    <div className={className}>
-      <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden shadow-inner">
-        <div
-          className={`h-full bg-gradient-to-r ${colorMap[color] || colorMap.blue} rounded-full transition-all duration-700 ease-out`}
-          style={{ width: `${percentage}%` }}
-          role="progressbar"
-          aria-valuenow={animatedValue}
-          aria-valuemin="0"
-          aria-valuemax={max}
-        />
-      </div>
-      {showLabel && (
-        <span className="text-xs text-slate-500 dark:text-slate-400 mt-1 block">
-          {percentage.toFixed(0)}%
-        </span>
-      )}
-    </div>
-  );
-};
-
-/**
  * MetricCard - Reusable metric display component
  */
-// eslint-disable-next-line no-unused-vars
-const MetricCard = ({ icon: Icon, label, value, unit, status, statusBadge, trend, trendDirection, color, showProgress, progressValue, progressMax, isDarkMode = false }) => {
+const MetricCard = ({ icon, label, value, unit, statusBadge, trend, trendDirection, color, isDarkMode = false }) => {
+  const Icon = icon;
   const iconBgMap = {
     blue: isDarkMode ? 'bg-blue-900/30' : 'bg-blue-500/15',
     green: isDarkMode ? 'bg-green-900/30' : 'bg-green-500/15',
@@ -201,155 +176,222 @@ const MetricCard = ({ icon: Icon, label, value, unit, status, statusBadge, trend
  * 
  * @param {Object} props
  * @param {Object} props.location - Location coordinates {lat, lon}
- * @param {number} props.moisture - Soil moisture percentage (0-100)
- * @param {number} props.temperature - Soil temperature in Celsius
- * @param {number} props.ph - Soil pH level (0-14)
- * @param {string} props.nutrientLevel - Nutrient level ('Poor', 'Medium', 'High')
  * @param {boolean} props.isLoading - Loading state
  * @param {function} props.onMenuClick - Menu action handler
  * @param {Object} props.trends - Trend data {moisture, temperature, ph, nutrient}
  */
 const SoilMonitoringCard = ({
-  location = { lat: 28.6139, lon: 77.2090 }, // Default: New Delhi
-  moisture = 45,
-  temperature = 28,
-  ph = 6.8,
-  nutrientLevel = 'Medium',
+  location = null,
   isLoading: externalLoading = false,
   onMenuClick = () => {},
-  trends = { moisture: 2, temperature: 1, ph: 0, nutrient: 3 },
-  trendDirections = { moisture: 'up', temperature: 'up', ph: 'stable', nutrient: 'up' },
+  trends = { moisture: 0, temperature: 0, ph: 0, nutrient: 0 },
+  trendDirections = { moisture: 'stable', temperature: 'stable', ph: 'stable', nutrient: 'stable' },
   isDarkMode = false,
 }) => {
-  // State for API data
-  const [soilData, setSoilData] = useState(null);
+  const [soilSnapshot, setSoilSnapshot] = useState({
+    current: null,
+    previous: null,
+  });
   const [isLoading, setIsLoading] = useState(false);
-  // eslint-disable-next-line no-unused-vars
   const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const lastAutoFetchKeyRef = useRef(null);
 
-  // ========================================
-  // HELPER: Parse ISRIC API Response
-  // ========================================
-  const parseSoilData = useCallback((apiData) => {
-    try {
-      let phValue = ph; // fallback
-      let socValue = nutrientLevel; // fallback (High/Medium/Low)
-      let bdodValue = '1.3'; // fallback for bulk density
-
-      // Parse pH (phh2o property)
-      if (apiData?.phh2o?.[0]?.values) {
-        const phValues = apiData.phh2o[0].values;
-        if (phValues.mean !== undefined) {
-          phValue = (phValues.mean / 10).toFixed(1); // API returns pH * 10
-        }
-      }
-
-      // Parse Soil Organic Carbon (soc)
-      if (apiData?.soc?.[0]?.values) {
-        const socValues = apiData.soc[0].values;
-        if (socValues.mean !== undefined) {
-          const socMean = socValues.mean / 10; // Typically in g/kg, convert to %
-          if (socMean < 10) socValue = 'Low';
-          else if (socMean < 20) socValue = 'Medium';
-          else socValue = 'High';
-        }
-      }
-
-      // Parse Bulk Density (bdod)
-      if (apiData?.bdod?.[0]?.values) {
-        const bdodValues = apiData.bdod[0].values;
-        if (bdodValues.mean !== undefined) {
-          bdodValue = (bdodValues.mean / 100).toFixed(2); // API returns in cg/cm³
-        }
-      }
-
-      return {
-        ph: parseFloat(phValue),
-        soc: socValue,
-        bdod: bdodValue,
-      };
-    } catch (err) {
-      console.error('Error parsing soil data:', err);
-      return { ph, soc: nutrientLevel, bdod: '1.3' };
-    }
-  }, [ph, nutrientLevel]);
-
-  // ========================================
-  // EFFECT: Fetch Soil Data When Location Changes
-  // ========================================
   useEffect(() => {
-    const fetchSoilData = async () => {
-      if (!location?.lat || !location?.lon) return;
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
 
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setSoilSnapshot({ current: null, previous: null });
+      setError('Location coordinates are missing for live soil data.');
+      setIsLoading(false);
+      return;
+    }
+
+    const isManualRefresh = refreshKey > 0;
+    if (!isManualRefresh && lastAutoFetchKeyRef.current === fetchKey) {
+      return;
+    }
+    lastAutoFetchKeyRef.current = fetchKey;
+
+    let cancelled = false;
+    let timeoutId = null;
+
+    const loadSoilData = async () => {
       setIsLoading(true);
       setError(null);
 
+      // Hard timeout: Force loading state to clear after 6 seconds to prevent infinite loading
+      timeoutId = setTimeout(() => {
+        if (!cancelled) {
+          console.warn('⏱️ Soil data fetch timeout - clearing loading state');
+          setIsLoading(false);
+        }
+      }, 6000);
+
       try {
-        const data = await SoilAPI.get(location.lat, location.lon);
-        const parsed = parseSoilData(data);
-        setSoilData(parsed);
-      } catch (err) {
-        console.error('Soil API Error:', err);
-        setError(err.message);
-        // Keep using existing values as fallback
-      } finally {
+        const liveSoilData = await SoilAPI.get(lat, lon, { force: isManualRefresh });
+        if (cancelled) return;
+
+        clearTimeout(timeoutId);
+        setSoilSnapshot((prev) => ({
+          current: liveSoilData,
+          previous: prev.current,
+        }));
+      } catch (fetchError) {
+        if (cancelled) return;
+
+        clearTimeout(timeoutId);
+        setSoilSnapshot((prev) => ({
+          current: null,
+          previous: prev.previous,
+        }));
+        setError(fetchError?.message || 'Failed to fetch live soil data.');
         setIsLoading(false);
       }
     };
 
-    fetchSoilData();
-  }, [location?.lat, location?.lon, parseSoilData]);
+    loadSoilData();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [location?.lat, location?.lon, refreshKey]);
 
   // ========================================
   // USE REAL DATA OR FALLBACK
   // ========================================
-  const displayPh = soilData?.ph ?? ph;
-  const displaySoc = soilData?.soc ?? nutrientLevel;
+  const displayMoisture = soilSnapshot.current?.moisture ?? null;
+  const displayTemperature = soilSnapshot.current?.temperature ?? null;
+  const displayPh = soilSnapshot.current?.ph ?? null;
+  const displaySoc = soilSnapshot.current?.soc ?? null;
+  const soilAvailability = soilSnapshot.current?.soilAvailability ?? null;
   const actualLoading = isLoading || externalLoading;
+  const hasValidLocation = Number.isFinite(Number(location?.lat)) && Number.isFinite(Number(location?.lon));
+  const hasMoisture =
+    displayMoisture !== null &&
+    displayMoisture !== undefined &&
+    Number.isFinite(Number(displayMoisture));
+  const hasTemperature =
+    displayTemperature !== null &&
+    displayTemperature !== undefined &&
+    Number.isFinite(Number(displayTemperature));
+  const hasPh =
+    displayPh !== null &&
+    displayPh !== undefined &&
+    Number.isFinite(Number(displayPh)) &&
+    soilAvailability !== 'unavailable';
+  const hasSoc =
+    typeof displaySoc === 'string' &&
+    displaySoc.length > 0 &&
+    soilAvailability !== 'unavailable';
+  const hasRenderableData = hasMoisture || hasTemperature || hasPh || hasSoc;
+
+  const getIsricToken = (hasValue) => {
+    if (!hasValidLocation) return 'NC';
+    if (soilAvailability === 'unavailable') return 'UNV';
+    if (!hasValue) return 'N/A';
+    return null;
+  };
+
+  const phToken = getIsricToken(hasPh);
+  const socToken = getIsricToken(hasSoc);
+
+  const getTokenBadge = (token) => {
+    if (token === 'NC') return 'nc';
+    if (token === 'UNV') return 'unv';
+    if (token === 'N/A') return 'na';
+    return 'moderate';
+  };
+
+  // ========================================
+  // DYNAMIC TRENDS: Compare current vs previous snapshot
+  // ========================================
+  const resolvedTrends = useMemo(() => {
+    const current = soilSnapshot.current;
+    const previous = soilSnapshot.previous;
+
+    if (!current || !previous) {
+      return {
+        values: trends,
+        directions: trendDirections,
+      };
+    }
+
+    const nutrientScore = { Poor: 1, Medium: 2, High: 3 };
+    const computePercent = (prev, current) => {
+      if (prev == null || current == null) return 0;
+      if (prev === 0) return 0;
+      return Math.round(((current - prev) / Math.abs(prev)) * 100);
+    };
+
+    const moistureTrend = computePercent(previous.moisture, current.moisture);
+    const temperatureTrend = computePercent(previous.temperature, current.temperature);
+    const phTrend = computePercent(previous.ph, current.ph);
+    const nutrientTrend = computePercent(
+      nutrientScore[previous.soc] ?? 0,
+      nutrientScore[current.soc] ?? 0
+    );
+
+    const toDirection = (value) => {
+      if (value > 0) return 'up';
+      if (value < 0) return 'down';
+      return 'stable';
+    };
+
+    return {
+      values: {
+        moisture: Math.abs(moistureTrend),
+        temperature: Math.abs(temperatureTrend),
+        ph: Math.abs(phTrend),
+        nutrient: Math.abs(nutrientTrend),
+      },
+      directions: {
+        moisture: toDirection(moistureTrend),
+        temperature: toDirection(temperatureTrend),
+        ph: toDirection(phTrend),
+        nutrient: toDirection(nutrientTrend),
+      },
+    };
+  }, [soilSnapshot, trends, trendDirections]);
 
 
 
   // Compute moisture status
-  const getMoistureStatus = useMemo(() => {
-    return () => {
-      if (moisture < 25) return { status: 'Dry', badge: 'dry', color: 'orange' };
-      if (moisture < 40) return { status: 'Dry', badge: 'dry', color: 'orange' };
-      if (moisture <= 65) return { status: 'Optimal', badge: 'optimal', color: 'green' };
-      return { status: 'Wet', badge: 'wet', color: 'blue' };
-    };
-  }, [moisture])();
+  const moistureData = useMemo(() => {
+    if (!hasMoisture) return { status: 'Unavailable', badge: 'moderate', color: 'blue' };
+    if (displayMoisture < 25) return { status: 'Dry', badge: 'dry', color: 'orange' };
+    if (displayMoisture < 40) return { status: 'Dry', badge: 'dry', color: 'orange' };
+    if (displayMoisture <= 65) return { status: 'Optimal', badge: 'optimal', color: 'green' };
+    return { status: 'Wet', badge: 'wet', color: 'blue' };
+  }, [displayMoisture, hasMoisture]);
 
   // Compute pH status (use real data)
-  const getPhStatus = useMemo(() => {
-    return () => {
-      if (displayPh < 6) return { status: 'Acidic', badge: 'acidic', color: 'red' };
-      if (displayPh < 7.3) return { status: 'Neutral', badge: 'neutral', color: 'green' };
-      return { status: 'Alkaline', badge: 'alkaline', color: 'blue' };
-    };
-  }, [displayPh])();
+  const phData = useMemo(() => {
+    if (!hasPh) return { status: 'Unavailable', badge: 'moderate', color: 'blue' };
+    if (displayPh < 6) return { status: 'Acidic', badge: 'acidic', color: 'red' };
+    if (displayPh < 7.3) return { status: 'Neutral', badge: 'neutral', color: 'green' };
+    return { status: 'Alkaline', badge: 'alkaline', color: 'blue' };
+  }, [displayPh, hasPh]);
 
   // Compute nutrient status (use real data)
-  const getNutrientColor = useMemo(() => {
-    return () => {
-      if (displaySoc === 'Poor') return 'red';
-      if (displaySoc === 'Medium') return 'orange';
-      return 'green';
-    };
-  }, [displaySoc])();
+  const nutrientColor = useMemo(() => {
+    if (!hasSoc) return 'blue';
+    if (displaySoc === 'Poor') return 'red';
+    if (displaySoc === 'Medium') return 'orange';
+    return 'green';
+  }, [displaySoc, hasSoc]);
 
   // Compute temperature status
-  const getTempStatus = useMemo(() => {
-    return () => {
-      if (temperature < 10) return { status: 'Cold', badge: 'moderate', color: 'blue' };
-      if (temperature <= 35) return { status: 'Optimal', badge: 'optimal', color: 'green' };
-      return { status: 'Hot', badge: 'moderate', color: 'orange' };
-    };
-  }, [temperature])();
-
-  const moistureData = getMoistureStatus;
-  const phData = getPhStatus;
-  const tempData = getTempStatus;
-  const nutrientColor = getNutrientColor;
+  const tempData = useMemo(() => {
+    if (!hasTemperature) return { status: 'Unavailable', badge: 'moderate', color: 'blue' };
+    if (displayTemperature < 10) return { status: 'Cold', badge: 'moderate', color: 'blue' };
+    if (displayTemperature <= 35) return { status: 'Optimal', badge: 'optimal', color: 'green' };
+    return { status: 'Hot', badge: 'moderate', color: 'orange' };
+  }, [displayTemperature, hasTemperature]);
 
   if (actualLoading) {
     return (
@@ -364,6 +406,24 @@ const SoilMonitoringCard = ({
             {[...Array(4)].map((_, i) => (
               <div key={i} className={`h-32 rounded animate-pulse ${isDarkMode ? 'bg-slate-700' : 'bg-emerald-50'}`} />
             ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasRenderableData) {
+    return (
+      <div className={`rounded-2xl p-4 sm:p-6 shadow-lg border ${
+        isDarkMode
+          ? 'bg-red-900/20 border-red-800 text-red-200'
+          : 'bg-red-50 border-red-200 text-red-700'
+      }`} role="alert">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          <div>
+            <h3 className="font-semibold mb-1">Unable to load soil data</h3>
+            <p className="text-sm opacity-90">{error || 'No live soil metrics were returned by the API.'}</p>
           </div>
         </div>
       </div>
@@ -402,17 +462,48 @@ const SoilMonitoringCard = ({
             Soil Monitoring
           </h2>
         </div>
-        <button
-          onClick={onMenuClick}
-          className={`p-1.5 rounded-lg transition-all duration-150 ${
-            isDarkMode
-              ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/60'
-              : 'text-slate-600 hover:text-emerald-600 hover:bg-emerald-100/50'
-          }`}
-          aria-label="Soil monitoring card options"
-        >
-          <MoreHorizontal className="w-5 h-5" />
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => {
+              setIsMenuOpen((prev) => !prev);
+              onMenuClick();
+            }}
+            className={`p-1.5 rounded-lg transition-all duration-150 ${
+              isDarkMode
+                ? 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/60'
+                : 'text-slate-600 hover:text-emerald-600 hover:bg-emerald-100/50'
+            }`}
+            aria-label="Soil monitoring card options"
+            aria-expanded={isMenuOpen}
+          >
+            <MoreHorizontal className="w-5 h-5" />
+          </button>
+
+          {isMenuOpen && (
+            <div className={`absolute right-0 mt-2 w-40 rounded-lg border shadow-lg z-20 menu-enter ${
+              isDarkMode
+                ? 'bg-slate-800 border-slate-700'
+                : 'bg-white border-emerald-100'
+            }`}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  setRefreshKey((prev) => prev + 1);
+                }}
+                disabled={actualLoading}
+                className={`w-full px-3 py-2 text-sm flex items-center gap-2 rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                  isDarkMode
+                    ? 'text-slate-200 hover:bg-slate-700'
+                    : 'text-slate-700 hover:bg-emerald-50'
+                }`}
+              >
+                <RefreshCw className={`w-4 h-4 ${actualLoading ? 'animate-spin' : ''}`} />
+                Refresh data
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Main Metrics Grid */}
@@ -422,11 +513,11 @@ const SoilMonitoringCard = ({
           <MetricCard
             icon={Droplets}
             label="Soil Moisture"
-            value={moisture}
-            unit="%"
+            value={hasMoisture ? Number(displayMoisture) : '--'}
+            unit={hasMoisture ? '%' : ''}
             statusBadge={moistureData.badge}
-            trend={Math.abs(trends.moisture)}
-            trendDirection={trendDirections.moisture}
+            trend={resolvedTrends.values.moisture}
+            trendDirection={resolvedTrends.directions.moisture}
             color={moistureData.color}
             isDarkMode={isDarkMode}
           />
@@ -435,11 +526,11 @@ const SoilMonitoringCard = ({
           <MetricCard
             icon={Thermometer}
             label="Soil Temperature"
-            value={temperature}
-            unit="°C"
+            value={hasTemperature ? Number(displayTemperature) : '--'}
+            unit={hasTemperature ? '°C' : ''}
             statusBadge={tempData.badge}
-            trend={Math.abs(trends.temperature)}
-            trendDirection={trendDirections.temperature}
+            trend={resolvedTrends.values.temperature}
+            trendDirection={resolvedTrends.directions.temperature}
             color={tempData.color}
             isDarkMode={isDarkMode}
           />
@@ -448,10 +539,10 @@ const SoilMonitoringCard = ({
           <MetricCard
             icon={AlertCircle}
             label="Soil pH"
-            value={displayPh.toFixed(1)}
-            statusBadge={phData.badge}
-            trend={Math.abs(trends.ph)}
-            trendDirection={trendDirections.ph}
+            value={hasPh ? Number(displayPh).toFixed(1) : phToken}
+            statusBadge={hasPh ? phData.badge : getTokenBadge(phToken)}
+            trend={resolvedTrends.values.ph}
+            trendDirection={resolvedTrends.directions.ph}
             color={phData.color}
             isDarkMode={isDarkMode}
           />
@@ -460,10 +551,10 @@ const SoilMonitoringCard = ({
           <MetricCard
             icon={Leaf}
             label="Nutrient Level"
-            value={displaySoc}
-            statusBadge={displaySoc}
-            trend={Math.abs(trends.nutrient)}
-            trendDirection={trendDirections.nutrient}
+            value={hasSoc ? displaySoc : socToken}
+            statusBadge={hasSoc ? displaySoc : getTokenBadge(socToken)}
+            trend={resolvedTrends.values.nutrient}
+            trendDirection={resolvedTrends.directions.nutrient}
             color={nutrientColor}
             isDarkMode={isDarkMode}
           />
@@ -491,7 +582,7 @@ const SoilMonitoringCard = ({
               <span className={`text-xs font-bold line-clamp-1 uppercase tracking-tight ${
                 isDarkMode ? 'text-white' : 'text-blue-950'
               }`}>
-                {moisture < 30 ? 'Critical' : moisture < 45 ? 'Low' : 'Balanced'}
+                {hasMoisture ? (displayMoisture < 30 ? 'Critical' : displayMoisture < 45 ? 'Low' : 'Balanced') : 'Unavailable'}
               </span>
             </div>
 
@@ -505,7 +596,7 @@ const SoilMonitoringCard = ({
               <span className={`text-xs font-bold line-clamp-1 uppercase tracking-tight ${
                 isDarkMode ? 'text-white' : 'text-orange-950'
               }`}>
-                {temperature < 10 ? 'Cold' : temperature > 35 ? 'Hot' : 'Ideal'}
+                {hasTemperature ? (displayTemperature < 10 ? 'Cold' : displayTemperature > 35 ? 'Hot' : 'Ideal') : 'Unavailable'}
               </span>
             </div>
 
@@ -530,7 +621,7 @@ const SoilMonitoringCard = ({
       <div className={`flex-shrink-0 text-xs text-center px-4 sm:px-6 pb-3 sm:pb-4 pt-0 ${
         isDarkMode ? 'text-slate-400' : 'text-slate-500'
       }`}>
-        🌾 Real-time soil monitoring
+        🌾 Live soil feed from NASA SMAP + Open-Meteo + ISRIC
       </div>
     </div>
   );

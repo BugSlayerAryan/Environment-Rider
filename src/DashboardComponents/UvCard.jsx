@@ -108,9 +108,6 @@ const UvCard = ({
   onRefresh = () => {},
   showMenu = true,
 }) => {
-  // Log props at component initialization
-  console.log('🔧 UvCard PROPS received:', { location, uvIndex, sunlightHours, radiationValue, isDarkMode });
-
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentUvIndex, setCurrentUvIndex] = useState(uvIndex);
@@ -119,39 +116,33 @@ const UvCard = ({
   const [apiLoading, setApiLoading] = useState(false);
   const [animatingField, setAnimatingField] = useState(null);
   const menuRef = useRef(null);
-
-  // Track location prop changes
-  useEffect(() => {
-    console.log('📍 UvCard LOCATION PROP CHANGED:', location);
-  }, [location]);
+  const lastAutoFetchKeyRef = useRef(null);
 
   // Fetch UV data when location changes
   useEffect(() => {
-    if (!location || !location.lat || !location.lon) {
-      console.log('⚠️ No location provided for UV data:', location);
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       return;
     }
 
-    console.log('📍 UvCard: Fetching UV data for location:', location);
+    if (lastAutoFetchKeyRef.current === fetchKey) {
+      return;
+    }
+    lastAutoFetchKeyRef.current = fetchKey;
 
     const fetchUvData = async () => {
       setApiLoading(true);
       try {
-        console.log(`🔄 UvCard: Calling UVAPI.get(${location.lat}, ${location.lon})`);
-        const data = await UVAPI.get(location.lat, location.lon);
-        console.log('✅ UvCard: UV API Response:', data);
-        console.log('✅ Data type check - uvi:', typeof data?.uvi, 'value:', data?.uvi);
-        console.log('✅ Data type check - sunlight:', typeof data?.sunlightHours, 'value:', data?.sunlightHours);
-        console.log('✅ Data type check - radiation:', typeof data?.radiationValue, 'value:', data?.radiationValue);
+        const data = await UVAPI.get(lat, lon);
         
         // Validate we got valid data and it's different from current values
         if (data && typeof data.uvi === 'number' && typeof data.sunlightHours === 'number' && typeof data.radiationValue === 'number') {
-          console.log('✅ Data validation passed - updating state');
-          console.log('🔄 UvCard: Setting state - UVI:', data.uvi, 'Sunlight:', data.sunlightHours, 'Radiation:', data.radiationValue);
           setCurrentUvIndex(data.uvi);
           setCurrentSunlightHours(data.sunlightHours);
           setCurrentRadiation(data.radiationValue);
-          console.log('✓ UvCard: State update complete');
         } else {
           console.warn('⚠️ UvCard: Invalid data received from API:', data);
         }
@@ -165,14 +156,9 @@ const UvCard = ({
     };
 
     fetchUvData();
-  }, [location]);
+  }, [location?.lat, location?.lon]);
 
   const severity = useMemo(() => getUvSeverity(currentUvIndex), [currentUvIndex]);
-
-  // Track state changes
-  useEffect(() => {
-    console.log('📊 UvCard: State changed - Display values:', { currentUvIndex, currentSunlightHours, currentRadiation });
-  }, [currentUvIndex, currentSunlightHours, currentRadiation]);
 
   // Animate on data updates - only animate the main UV value
   useEffect(() => {
@@ -182,18 +168,14 @@ const UvCard = ({
   }, [currentUvIndex, currentSunlightHours, currentRadiation]);
 
   const handleRefresh = async () => {
-    console.log('🔄 UvCard: REFRESH BUTTON CLICKED');
     setIsRefreshing(true);
     if (location && location.lat && location.lon) {
       try {
-        console.log('🔄 UvCard: Manual refresh triggered for:', location);
-        const data = await UVAPI.get(location.lat, location.lon);
-        console.log('📊 UvCard: Refresh data received:', data);
+        const data = await UVAPI.get(location.lat, location.lon, { force: true });
         if (data) {
           setCurrentUvIndex(data.uvi || currentUvIndex);
           setCurrentSunlightHours(data.sunlightHours || currentSunlightHours);
           setCurrentRadiation(data.radiationValue || currentRadiation);
-          console.log('✅ UvCard: State updated after refresh');
         }
       } catch (error) {
         console.error('❌ UvCard: Failed to refresh UV data:', error);
@@ -221,17 +203,6 @@ const UvCard = ({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [isMenuOpen]);
-
-  // Log render with current values
-  console.log('🎨 UvCard Render - Values being displayed:', {
-    location,
-    displayUVI: Math.round(currentUvIndex * 10) / 10,
-    displaySunlight: Math.round(currentSunlightHours * 10) / 10,
-    displayRadiation: currentRadiation,
-    severity: severity?.label,
-    apiLoading,
-    isRefreshing,
-  });
 
   // Skeleton loading state (initial load OR during refresh)
   if (isLoading || apiLoading || isRefreshing) {
@@ -313,12 +284,9 @@ const UvCard = ({
               }`} role="menu">
                 <button
                   onClick={(e) => {
-                    console.log('🖱️ Refresh button clicked - event:', e);
                     e.preventDefault();
                     e.stopPropagation();
-                    console.log('🔄 Calling handleRefresh...');
                     handleRefresh();
-                    console.log('🔄 Closing menu...');
                     setIsMenuOpen(false);
                   }}
                   className={`w-full enabled:cursor-pointer text-left px-2 sm:px-3 md:px-4 py-1.5 sm:py-2 text-xs sm:text-sm transition-all flex items-center gap-2 font-medium border-b touch-manipulation active:bg-slate-600/30 ${

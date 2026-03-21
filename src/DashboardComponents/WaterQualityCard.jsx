@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Droplets, AlertCircle, Waves, MoreHorizontal, RefreshCw } from 'lucide-react';
-import { WaterAPI } from '../api';
+import React, { useState, useMemo } from 'react';
+import { Droplets, AlertCircle, Waves, MoreHorizontal } from 'lucide-react';
 
 /**
  * pH Status Classification
@@ -33,6 +32,57 @@ const getPollutionStatus = (level) => {
   };
   return levels[level] || levels.low;
 };
+
+const CITY_WATER_MOCKS = [
+  {
+    city: 'New Delhi',
+    lat: 28.6139,
+    lon: 77.2090,
+    samples: [
+      { ph: 7.2, dissolvedOxygen: 6.8, pollutionLevel: 'low', temperature: 22, turbidity: 'Clear', siteName: 'Yamuna River - Station A', timestamp: '2026-03-21T08:10:00.000Z' },
+      { ph: 6.6, dissolvedOxygen: 5.4, pollutionLevel: 'moderate', temperature: 25, turbidity: 'Slightly Cloudy', siteName: 'Okhla Wetland Edge', timestamp: '2026-03-21T09:35:00.000Z' },
+      { ph: 8.1, dissolvedOxygen: 6.1, pollutionLevel: 'moderate', temperature: 26, turbidity: 'Turbid', siteName: 'Canal Monitoring Point 3', timestamp: '2026-03-21T11:05:00.000Z' },
+    ],
+  },
+  {
+    city: 'Mumbai',
+    lat: 19.0760,
+    lon: 72.8777,
+    samples: [
+      { ph: 7.4, dissolvedOxygen: 6.2, pollutionLevel: 'moderate', temperature: 27, turbidity: 'Slightly Cloudy', siteName: 'Mithi River Belt', timestamp: '2026-03-21T08:20:00.000Z' },
+      { ph: 7.1, dissolvedOxygen: 7.0, pollutionLevel: 'low', temperature: 28, turbidity: 'Clear', siteName: 'Powai Lake Station', timestamp: '2026-03-21T10:00:00.000Z' },
+      { ph: 6.8, dissolvedOxygen: 5.1, pollutionLevel: 'high', temperature: 29, turbidity: 'Turbid', siteName: 'Creek Outfall Point', timestamp: '2026-03-21T12:05:00.000Z' },
+    ],
+  },
+  {
+    city: 'Bengaluru',
+    lat: 12.9716,
+    lon: 77.5946,
+    samples: [
+      { ph: 7.0, dissolvedOxygen: 7.3, pollutionLevel: 'low', temperature: 24, turbidity: 'Clear', siteName: 'Ulsoor Lake Sensor', timestamp: '2026-03-21T07:55:00.000Z' },
+      { ph: 6.9, dissolvedOxygen: 6.6, pollutionLevel: 'moderate', temperature: 25, turbidity: 'Slightly Cloudy', siteName: 'Bellandur Inlet', timestamp: '2026-03-21T09:40:00.000Z' },
+      { ph: 7.5, dissolvedOxygen: 6.1, pollutionLevel: 'moderate', temperature: 26, turbidity: 'Turbid', siteName: 'Storm Canal Junction', timestamp: '2026-03-21T11:30:00.000Z' },
+    ],
+  },
+  {
+    city: 'Kolkata',
+    lat: 22.5726,
+    lon: 88.3639,
+    samples: [
+      { ph: 7.3, dissolvedOxygen: 6.5, pollutionLevel: 'moderate', temperature: 26, turbidity: 'Slightly Cloudy', siteName: 'Hooghly East Bank', timestamp: '2026-03-21T08:05:00.000Z' },
+      { ph: 7.6, dissolvedOxygen: 6.9, pollutionLevel: 'low', temperature: 27, turbidity: 'Clear', siteName: 'Wetland Reserve Node', timestamp: '2026-03-21T10:25:00.000Z' },
+      { ph: 6.7, dissolvedOxygen: 5.0, pollutionLevel: 'high', temperature: 28, turbidity: 'Turbid', siteName: 'Drain Confluence Point', timestamp: '2026-03-21T12:15:00.000Z' },
+    ],
+  },
+];
+
+const DEFAULT_SAMPLES = [
+  { ph: 7.1, dissolvedOxygen: 6.4, pollutionLevel: 'moderate', temperature: 23, turbidity: 'Slightly Cloudy', siteName: 'City Water Station A', timestamp: '2026-03-21T08:00:00.000Z' },
+  { ph: 7.4, dissolvedOxygen: 7.1, pollutionLevel: 'low', temperature: 22, turbidity: 'Clear', siteName: 'City Water Station B', timestamp: '2026-03-21T10:00:00.000Z' },
+  { ph: 6.8, dissolvedOxygen: 5.3, pollutionLevel: 'high', temperature: 25, turbidity: 'Turbid', siteName: 'City Water Station C', timestamp: '2026-03-21T12:00:00.000Z' },
+];
+
+const getDistanceSquared = (lat1, lon1, lat2, lon2) => ((lat1 - lat2) ** 2) + ((lon1 - lon2) ** 2);
 
 /**
  * MetricItem - Reusable metric display component
@@ -86,212 +136,58 @@ const MetricItem = ({ icon: Icon, label, value, unit, status, isDarkMode, progre
 );
 
 /**
- * WaterQualityCard - Premium Water Quality Component
+ * WaterQualityCard - Water Quality Demo Component (No API Calls)
  */
 const WaterQualityCard = ({
   isDarkMode = false,
-  location = { lat: 28.6139, lon: 77.2090 }, // Default: New Delhi
   showMenu = true,
+  location = { lat: 28.6139, lon: 77.2090 },
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const [waterData, setWaterData] = useState({
-    ph: 7.2,
-    dissolvedOxygen: 6.8,
-    pollutionLevel: 'low',
-    temperature: 22,
-    turbidity: 'Clear',
-    siteName: 'Unknown Site',
-    timestamp: new Date().toISOString(),
-  });
-  const menuRef = useRef(null);
+  const [mockIndex, setMockIndex] = useState(0);
+
+  const cityMock = useMemo(() => {
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return { city: 'Selected City', samples: DEFAULT_SAMPLES };
+    }
+
+    let nearest = CITY_WATER_MOCKS[0];
+    let best = Number.POSITIVE_INFINITY;
+
+    CITY_WATER_MOCKS.forEach((entry) => {
+      const distance = getDistanceSquared(lat, lon, entry.lat, entry.lon);
+      if (distance < best) {
+        best = distance;
+        nearest = entry;
+      }
+    });
+
+    return nearest || { city: 'Selected City', samples: DEFAULT_SAMPLES };
+  }, [location?.lat, location?.lon]);
+
+  const activeSamples = cityMock.samples?.length ? cityMock.samples : DEFAULT_SAMPLES;
+  const cityHash = useMemo(
+    () => cityMock.city.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0),
+    [cityMock.city]
+  );
+  const effectiveIndex = (mockIndex + cityHash) % activeSamples.length;
+  const waterData = activeSamples[effectiveIndex];
 
   // Derived states from waterData
   const phStatus = useMemo(() => getPHStatus(waterData.ph), [waterData.ph]);
   const doStatus = useMemo(() => getDOStatus(waterData.dissolvedOxygen), [waterData.dissolvedOxygen]);
   const pollutionStatus = useMemo(() => getPollutionStatus(waterData.pollutionLevel), [waterData.pollutionLevel]);
 
-  // Helper function to classify pollution level based on water quality metrics
-  // Combines pH and DO data to derive overall water quality
-  const classifyPollutionLevel = (do_value, ph_value) => {
-    const issues = [];
-    
-    // Check dissolved oxygen (critical water quality indicator)
-    // DO < 5 is critical (poor), 5-7 is moderate, >= 7 is good
-    if (do_value < 5) issues.push('critical');
-    else if (do_value < 7) issues.push('moderate');
-    
-    // Check pH (acidic/alkaline conditions indicate pollution)
-    // Neutral pH (6.5-8.5) is good, extreme values indicate poor quality
-    if (ph_value < 6.5 || ph_value > 8.5) {
-      // More extreme deviation = more severe
-      const deviationFromOptimal = Math.min(
-        Math.abs(ph_value - 6.5),
-        Math.abs(ph_value - 8.5)
-      );
-      if (deviationFromOptimal > 1.5) issues.push('critical');
-      else issues.push('moderate');
-    }
-    
-    // Determine overall pollution level based on issues found
-    if (issues.includes('critical')) return 'high';
-    if (issues.includes('moderate')) return 'moderate';
-    return 'low';
+  const handleRefresh = () => {
+    setMockIndex((prev) => (prev + 1) % activeSamples.length);
   };
 
-  // Fetch water quality data from USGS API
-  const fetchWaterQuality = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setHasError(false);
-      
-      console.log('🌊 Fetching water quality for:', { lat: location.lat, lon: location.lon });
-      
-      const response = await WaterAPI.get(location.lat, location.lon);
-      
-      console.log('💧 Water Quality Response:', response);
-      console.log('📊 Data Source:', response.source);
-      
-      // USGSAPI always returns data (either live or fallback)
-      // It will never return null/undefined due to triple-level fallback
-      if (!response) {
-        throw new Error('No data received');
-      }
-      
-      // Classify pollution level based on DO and pH
-      const pollutionLevel = classifyPollutionLevel(response.dissolvedOxygen, response.ph);
-      
-      // Map turbidity numeric value to clarity descriptors
-      // Low turbidity (< 1 NTU) = Crystal Clear
-      // Medium (1-3 NTU) = Clear
-      // Medium-High (3-5 NTU) = Slightly Cloudy
-      // High (> 5 NTU) = Turbid/Polluted
-      let turbidityDescriptor = 'Clear'; // Default fallback
-      if (response.turbidity !== null && response.turbidity !== undefined) {
-        const turbidityValue = parseFloat(response.turbidity);
-        if (turbidityValue < 1) {
-          turbidityDescriptor = 'Crystal Clear';
-        } else if (turbidityValue < 3) {
-          turbidityDescriptor = 'Clear';
-        } else if (turbidityValue < 5) {
-          turbidityDescriptor = 'Slightly Cloudy';
-        } else {
-          turbidityDescriptor = 'Turbid';
-        }
-      }
-      
-      setWaterData({
-        ph: response.ph || 7.2,
-        dissolvedOxygen: response.dissolvedOxygen || 6.8,
-        pollutionLevel,
-        temperature: response.temperature || 22,
-        turbidity: turbidityDescriptor,
-        siteName: response.siteName || 'USGS Monitoring Station',
-        timestamp: response.timestamp || new Date().toISOString(),
-      });
-      
-      // Success - even if using fallback data
-      setIsLoading(false);
-      setHasError(false);
-    } catch (error) {
-      // This should rarely execute given the triple-level fallback in USGSAPI
-      console.error('❌ Water Quality Fetch Error:', error);
-      setHasError(true);
-      setIsLoading(false);
-    }
-  }, [location.lat, location.lon]);
-
-  // Fetch water quality data when location changes
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchWaterQuality();
-    }, 300); // Debounce rapid location changes
-    
-    return () => clearTimeout(timer);
-  }, [location, fetchWaterQuality]);
-
-  const handleRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      await fetchWaterQuality();
-    } catch (error) {
-      console.error('Water quality refresh failed:', error);
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 1000);
-    }
-  }, [fetchWaterQuality]);
-
-  // Close menu on outside click with ref-based detection
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
-        setIsMenuOpen(false);
-      }
-    };
-    
-    if (isMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [isMenuOpen]);
-
-  // Skeleton loading state
-  if (isLoading) {
-    return (
-      <div className={`rounded-2xl p-4 sm:p-6 shadow-lg transition-all duration-300 ${
-        isDarkMode
-          ? 'bg-slate-800 border border-slate-700'
-          : 'bg-white border border-gray-100'
-      }`} role="status" aria-label="Loading water quality information" aria-busy="true">
-        <div className="animate-pulse space-y-4">
-          <div className="flex justify-between">
-            <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-24"></div>
-            <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-6"></div>
-          </div>
-          <div className="h-16 bg-gray-300 dark:bg-gray-600 rounded-lg w-full"></div>
-          <div className="space-y-2">
-            <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded"></div>
-            <div className="h-3 bg-gray-300 dark:bg-gray-600 rounded"></div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Error state
-  if (hasError) {
-    return (
-      <div 
-        className={`rounded-2xl p-4 sm:p-6 shadow-lg border ${
-          isDarkMode
-            ? 'bg-red-900/20 border-red-800 text-red-200'
-            : 'bg-red-50 border-red-200 text-red-700'
-        }`}
-        role="alert"
-      >
-        <div className="flex items-start gap-3">
-          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <div>
-            <h3 className="font-semibold mb-1">Unable to load water quality data</h3>
-            <p className="text-sm opacity-90">Please try refreshing the data.</p>
-            <button
-              onClick={handleRefresh}
-              className={`mt-3 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                isDarkMode
-                  ? 'bg-red-800/50 hover:bg-red-800'
-                  : 'bg-red-100 hover:bg-red-200'
-              }`}
-              aria-label="Retry loading water quality data"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Close menu on outside click
+  const handleMenuClick = () => {
+    setIsMenuOpen(!isMenuOpen);
+  };
 
   return (
     <div
@@ -325,13 +221,9 @@ const WaterQualityCard = ({
         </h3>
 
         {showMenu && (
-          <div className="relative" ref={menuRef}>
+          <div className="relative">
             <button
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setIsMenuOpen(false);
-                if (e.key === 'Enter') setIsMenuOpen(!isMenuOpen);
-              }}
+              onClick={handleMenuClick}
               className={`p-1.5 rounded-lg transition-all duration-300 group ${
                 isDarkMode
                   ? 'hover:bg-slate-700/60 text-gray-400 hover:text-gray-200'
@@ -362,12 +254,9 @@ const WaterQualityCard = ({
                       : 'text-gray-700 hover:bg-cyan-50/70 border-b border-gray-100/50'
                   }`}
                   role="menuitem"
-                  aria-label="Refresh water quality data"
+                  aria-label="Load next mock water data"
                 >
-                  <RefreshCw className={`w-4 h-4 flex-shrink-0 transition-transform ${
-                    isRefreshing ? 'animate-spin' : 'group-hover:rotate-180'
-                  }`} aria-hidden="true" />
-                  <span>Refresh Data</span>
+                  <span>🔄 Next Mock Sample</span>
                 </button>
               </div>
             )}
@@ -462,7 +351,7 @@ const WaterQualityCard = ({
       <div className={`flex-shrink-0 text-xs text-center px-4 sm:px-6 pb-3 sm:pb-4 pt-0 transition-opacity hover:opacity-100 ${
         isDarkMode ? 'text-gray-500' : 'text-gray-400'
       }`}>
-        💧 Real-time water monitoring
+        {cityMock.city} | {waterData.siteName} | {new Date(waterData.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} | Mock data
       </div>
     </div>
   );
@@ -470,8 +359,8 @@ const WaterQualityCard = ({
 
 WaterQualityCard.defaultProps = {
   isDarkMode: false,
-  location: { lat: 28.6139, lon: 77.2090 },
   showMenu: true,
+  location: { lat: 28.6139, lon: 77.2090 },
 };
 
 export default WaterQualityCard;

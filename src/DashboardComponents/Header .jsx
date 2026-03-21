@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
-  Search, Bell, User, Moon, Sun, Leaf, Settings, LogOut, Map, TrendingUp, ArrowRight, Menu, X, Droplets, Wind, CloudRain
+  Search, Bell, User, Moon, Sun, Leaf, Settings, LogOut, Map, TrendingUp, ArrowRight, Menu, X
 } from 'lucide-react';
 /* eslint-enable no-unused-vars */
 
@@ -64,10 +64,11 @@ const Header = ({ isDarkMode = true, onLocationSelect = () => {}, onDarkModeTogg
   const handleLocationSearch = async (location) => {
     try {
       // Get coordinates from city name
-      const { lat, lon } = await getCoordinatesFromCity(location);
+      const { lat, lon, displayName } = await getCoordinatesFromCity(location);
+      const cityName = displayName?.split(',')?.[0]?.trim() || location;
       
       // Call the callback to update parent component
-      onLocationSelect({ lat, lon });
+      onLocationSelect({ lat, lon, cityName });
       
       // Clear search after successful selection
       setSearchValue('');

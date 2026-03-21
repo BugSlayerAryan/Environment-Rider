@@ -274,22 +274,27 @@ const AqiCard = ({
   const [apiLoading, setApiLoading] = useState(false);
   const [animatingField, setAnimatingField] = useState(null);
   const menuRef = useRef(null);
+  const lastAutoFetchKeyRef = useRef(null);
 
   // Fetch AQI data when location changes
   useEffect(() => {
-    if (!location || !location.lat || !location.lon) {
-      console.log('⚠️ No location provided:', location);
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       return;
     }
 
-    console.log('📍 Fetching AQI for:', location);
+    if (lastAutoFetchKeyRef.current === fetchKey) {
+      return;
+    }
+    lastAutoFetchKeyRef.current = fetchKey;
 
     const fetchAqiData = async () => {
       setApiLoading(true);
       try {
-        console.log(`🔄 Calling AQIAPI.get(${location.lat}, ${location.lon})`);
-        const data = await AQIAPI.get(location.lat, location.lon);
-        console.log('✅ AQI API Response:', data);
+        const data = await AQIAPI.get(lat, lon);
         setCurrentAqiValue(data.aqi || aqiValue);
         setCurrentPm25(data.pm25 || pm25);
         setCurrentPm10(data.pm10 || pm10);
@@ -302,7 +307,7 @@ const AqiCard = ({
     };
 
     fetchAqiData();
-  }, [location, aqiValue, pm25, pm10]);
+  }, [location?.lat, location?.lon, aqiValue, pm25, pm10]);
 
   const category = useMemo(() => getAqiCategory(currentAqiValue), [currentAqiValue]);
   const healthAdvice = useMemo(() => HEALTH_ADVICE[category.key], [category.key]);
@@ -318,7 +323,7 @@ const AqiCard = ({
     setIsRefreshing(true);
     if (location && location.lat && location.lon) {
       try {
-        const data = await AQIAPI.get(location.lat, location.lon);
+        const data = await AQIAPI.get(location.lat, location.lon, { force: true });
         setCurrentAqiValue(data.aqi || currentAqiValue);
         setCurrentPm25(data.pm25 || currentPm25);
         setCurrentPm10(data.pm10 || currentPm10);

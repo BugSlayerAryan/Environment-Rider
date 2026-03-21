@@ -205,14 +205,29 @@ const WeatherCard = ({
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await fetchWeatherData();
+      const data = await WeatherAPI.get(latitude, longitude, { force: true });
+      
+      const windSpeedKmh = Math.round(data.wind * 3.6);
+      const windDirection = getWindDirection(data.windDeg || 0);
+      const windFormatted = windDirection
+        ? `${windSpeedKmh} km/h ${windDirection}`
+        : `${windSpeedKmh} km/h`;
+
+      setApiData({
+        temp: data.temp,
+        condition: data.condition,
+        humidity: data.humidity,
+        windFormatted,
+        rainProbability: 0,
+        ...data,
+      });
       await propOnRefresh();
     } catch (error) {
       console.error('Weather refresh failed:', error);
     } finally {
       setTimeout(() => setIsRefreshing(false), 1000);
     }
-  }, [fetchWeatherData, propOnRefresh]);
+  }, [latitude, longitude, propOnRefresh]);
 
   // Animate on data updates
   useEffect(() => {

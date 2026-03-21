@@ -1,12 +1,51 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Leaf, Wind, AlertCircle, MoreHorizontal, TrendingUp, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Leaf, Wind, AlertCircle, MoreHorizontal, RefreshCw } from 'lucide-react';
 import { PollenAPI } from '../api';
+
+const BREAKDOWN_META = {
+  Grass: { color: 'bg-green-400 dark:bg-green-500' },
+  Tree: { color: 'bg-teal-400 dark:bg-teal-500' },
+  Weed: { color: 'bg-lime-400 dark:bg-lime-500' },
+};
+
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const FETCH_TIMEOUT = 6000; // 6 seconds (restored - 2.5s was too aggressive)
+
+const classifyRiskLevel = (total) => {
+  if (total > 150) return 'High';
+  if (total > 80) return 'Moderate';
+  return 'Low';
+};
+
+// ═══════════════════════════════════════════════════════════════
+// CACHE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════
+const pollenCache = new Map();
+
+const getCachedData = (key) => {
+  const cached = pollenCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > CACHE_DURATION) {
+    pollenCache.delete(key);
+    return null;
+  }
+  return cached.data;
+};
+
+const setCachedData = (key, data) => {
+  pollenCache.set(key, {
+    data,
+    timestamp: Date.now(),
+  });
+};
+
+const generateCacheKey = (lat, lon) => `${lat.toFixed(4)},${lon.toFixed(4)}`;
 
 /**
  * StatusBadge - Reusable status indicator component
  */
 const StatusBadge = ({ status, className = '' }) => {
-  const statusConfig = {
+  const statusConfig = useMemo(() => ({
     low: {
       bg: 'bg-emerald-100 dark:bg-emerald-900',
       text: 'text-emerald-700 dark:text-emerald-200',
@@ -22,7 +61,7 @@ const StatusBadge = ({ status, className = '' }) => {
       text: 'text-orange-700 dark:text-orange-200',
       label: 'High',
     },
-  };
+  }), []);
 
   const config = statusConfig[status?.toLowerCase()] || statusConfig.low;
 
@@ -38,13 +77,15 @@ const StatusBadge = ({ status, className = '' }) => {
  */
 const ProgressBar = ({ value, max = 100, showLabel = true, className = '' }) => {
   const [animatedValue, setAnimatedValue] = useState(0);
+  const hasNumericValue = value !== null && value !== undefined && Number.isFinite(Number(value));
+  const normalizedValue = hasNumericValue ? Number(value) : 0;
 
   useEffect(() => {
-    const timer = setTimeout(() => setAnimatedValue(value), 100);
+    const timer = setTimeout(() => setAnimatedValue(normalizedValue), 100);
     return () => clearTimeout(timer);
-  }, [value]);
+  }, [normalizedValue]);
 
-  const percentage = Math.min((animatedValue / max) * 100, 100);
+  const percentage = useMemo(() => Math.min((animatedValue / max) * 100, 100), [animatedValue, max]);
 
   return (
     <div className={className}>
@@ -61,7 +102,7 @@ const ProgressBar = ({ value, max = 100, showLabel = true, className = '' }) => 
       {showLabel && (
         <div className="flex items-center justify-between mt-1.5">
           <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Vegetation Coverage</span>
-          <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{percentage.toFixed(0)}%</span>
+          <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{hasNumericValue ? `${percentage.toFixed(0)}%` : '--'}</span>
         </div>
       )}
     </div>
@@ -72,11 +113,14 @@ const ProgressBar = ({ value, max = 100, showLabel = true, className = '' }) => 
  * PollenChart - Mini bar chart for pollen breakdown
  */
 const PollenChart = ({ data, isLoading }) => {
-  const [animatedBars] = useState(true);
+  const maxValue = useMemo(() => {
+    if (!Array.isArray(data) || data.length === 0) return 1;
+    return Math.max(...data.map((d) => Number(d.value) || 0), 1);
+  }, [data]);
 
   if (isLoading) {
     return (
-      <div className="flex items-end justify-around h-24 gap-2">
+      <div className="flex items-end justify-around h-24 gap-1">
         {[...Array(3)].map((_, i) => (
           <div key={i} className="flex-1 bg-slate-200 dark:bg-slate-700 rounded-t animate-pulse h-16" />
         ))}
@@ -84,26 +128,36 @@ const PollenChart = ({ data, isLoading }) => {
     );
   }
 
-  return (
-    <div className="flex items-end justify-around h-24 gap-2">
-      {data.map((item, index) => {
-        const maxValue = Math.max(...data.map((d) => d.value));
-        const percentage = (item.value / maxValue) * 100;
+  const safeData = Array.isArray(data) ? data : [];
+  if (safeData.length === 0) {
+    return (
+      <div className="h-24 flex items-center justify-center">
+        <span className="text-xs text-slate-500 dark:text-slate-400">No live breakdown data</span>
+      </div>
+    );
+  }
 
+  return (
+    <div className="flex items-end justify-around h-24 gap-1.5">
+      {safeData.map((item, index) => {
+        const hasNumericValue = Number.isFinite(Number(item.value));
+        const numericValue = hasNumericValue ? Number(item.value) : 0;
+        const percentage = (numericValue / maxValue) * 100;
+        
         return (
           <div key={index} className="flex flex-col items-center flex-1">
             <div className="w-full h-full flex items-end justify-center">
               <div
                 className={`w-full rounded-t-lg transition-all duration-700 ease-out ${item.color} shadow-md hover:shadow-lg hover:scale-105`}
                 style={{
-                  height: animatedBars ? `${percentage}%` : '0%',
+                  height: `${hasNumericValue ? percentage : 0}%`,
                 }}
                 role="img"
-                aria-label={`${item.name}: ${item.value} grains/m³`}
+                aria-label={`${item.name}: ${hasNumericValue ? numericValue : 'Unavailable'} grains/m³`}
               />
             </div>
             <span className="text-xs font-medium text-slate-600 dark:text-slate-400 mt-2">{item.name}</span>
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{item.value}</span>
+            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{hasNumericValue ? numericValue : '--'}</span>
           </div>
         );
       })}
@@ -113,123 +167,241 @@ const PollenChart = ({ data, isLoading }) => {
 
 const PollenVegetationCard = ({
   isDarkMode = false,
-  location = { lat: 28.6139, lon: 77.2090 }, // Default: New Delhi
+  location = { lat: 28.6139, lon: 77.2090 },
   showMenu = true,
 }) => {
-  const [animated] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const menuRef = useRef(null);
 
-  // Pollen data state
-  const [pollenLevel, setPollenLevel] = useState('High');
-  const [pollenCount, setPollenCount] = useState(320);
-  const [vegetationPercent, setVegetationPercent] = useState(65);
-  const [pollenBreakdown, setPollenBreakdown] = useState([
-    { name: 'Grass', value: 120, color: 'bg-green-400 dark:bg-green-500' },
-    { name: 'Tree', value: 85, color: 'bg-teal-400 dark:bg-teal-500' },
-    { name: 'Weed', value: 115, color: 'bg-lime-400 dark:bg-lime-500' },
-  ]);
+  const [pollenLevel, setPollenLevel] = useState('Low');
+  const [pollenCount, setPollenCount] = useState(null);
+  const [vegetationPercent, setVegetationPercent] = useState(null);
+  const [pollenBreakdown, setPollenBreakdown] = useState([]);
   const [healthHint, setHealthHint] = useState(null);
+  const [isPollenUnavailable, setIsPollenUnavailable] = useState(false);
+  
+  const lastAutoFetchKeyRef = useRef(null);
+  const fetchAbortControllerRef = useRef(null);
+  const fetchTimeoutRef = useRef(null);
+  
+  const hasVegetationData = useMemo(
+    () => Number.isFinite(Number(vegetationPercent)) && Number(vegetationPercent) > 0,
+    [vegetationPercent]
+  );
 
-  // Fetch pollen data from API
-  const fetchPollenData = useCallback(async () => {
+  // Optimized data parsing
+  const parsePollenResponse = useCallback((response) => {
+    const toMetric = (value) => {
+      if (value === null || value === undefined) return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    };
+
+    const grass = toMetric(response.grass);
+    const tree = toMetric(response.tree);
+    const weed = toMetric(response.weed);
+    const totalFromParts = [grass, tree, weed].every((v) => Number.isFinite(v)) 
+      ? grass + tree + weed 
+      : null;
+    
+    const total = Number.isFinite(Number(response.pollenCount))
+      ? Number(response.pollenCount)
+      : totalFromParts;
+
+    const hasPollenData = Number.isFinite(total);
+    const riskLevel = hasPollenData
+      ? (response.riskLevel || classifyRiskLevel(total))
+      : 'Low';
+
+    const hints = {
+      Low: '✓ Good for outdoor activities',
+      Moderate: '⚠ Mild allergy risk, consider precautions',
+      High: '✕ High allergy risk, limit outdoor time',
+    };
+
+    const vegetationMetric = response.vegetationIndex;
+    const vegetationValue = vegetationMetric === null || vegetationMetric === undefined
+      ? null
+      : Number(vegetationMetric);
+
+    return {
+      hasPollenData,
+      pollenCount: hasPollenData ? total : null,
+      riskLevel,
+      healthHint: hasPollenData ? hints[riskLevel] : 'Live pollen data is temporarily unavailable',
+      pollenBreakdown: [
+        { name: 'Grass', value: grass, ...BREAKDOWN_META.Grass },
+        { name: 'Tree', value: tree, ...BREAKDOWN_META.Tree },
+        { name: 'Weed', value: weed, ...BREAKDOWN_META.Weed },
+      ],
+      vegetationPercent: Number.isFinite(vegetationValue) ? vegetationValue : null,
+      isPollenUnavailable: response.pollenUnavailable || response.unavailable || false,
+      hasError: !hasPollenData && !Number.isFinite(vegetationValue),
+    };
+  }, []);
+
+  // Fetch pollen data with timeout and caching
+  const fetchPollenData = useCallback(async (options = {}) => {
+    const { force = false } = options;
+    
     try {
+      const lat = Number(location?.lat);
+      const lon = Number(location?.lon);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        setHasError(true);
+        setIsLoading(false);
+        return;
+      }
+
+      const cacheKey = generateCacheKey(lat, lon);
+
+      // Check cache first (unless forcing refresh)
+      if (!force) {
+        const cachedData = getCachedData(cacheKey);
+        if (cachedData) {
+          // Batch state updates using single setState
+          setIsLoading(false);
+          setPollenCount(cachedData.pollenCount);
+          setPollenLevel(cachedData.riskLevel);
+          setHealthHint(cachedData.healthHint);
+          setPollenBreakdown(cachedData.pollenBreakdown);
+          setVegetationPercent(cachedData.vegetationPercent);
+          setIsPollenUnavailable(cachedData.isPollenUnavailable);
+          setHasError(cachedData.hasError);
+          return;
+        }
+      }
+
       setIsLoading(true);
       setHasError(false);
-      
-      console.log('🌿 Fetching pollen data for:', { lat: location.lat, lon: location.lon });
-      
-      const response = await PollenAPI.get(location.lat, location.lon);
-      
-      console.log('🌿 Pollen Response:', response);
-      console.log('📊 Data Source:', response.source);
-      
+
+      // Cancel previous request for faster response
+      if (fetchAbortControllerRef.current) {
+        fetchAbortControllerRef.current.abort();
+      }
+
+      // Create abort controller with shorter timeout
+      fetchAbortControllerRef.current = new AbortController();
+      fetchTimeoutRef.current = setTimeout(() => {
+        fetchAbortControllerRef.current?.abort();
+      }, FETCH_TIMEOUT);
+
+      console.log('🌿 Fetching pollen data for:', { lat, lon });
+
+      const response = await PollenAPI.get(lat, lon, { force });
+
       if (!response) {
         throw new Error('No pollen data received');
       }
-      
-      // Update pollen count
-      setPollenCount(response.pollenCount || 320);
-      
-      // Determine risk level and message
-      const riskLevel = response.riskLevel || 'Low';
-      setPollenLevel(riskLevel);
-      
-      // Set health hint based on risk level
-      const hints = {
-        Low: '✓ Good for outdoor activities',
-        Moderate: '⚠ Mild allergy risk, consider precautions',
-        High: '✕ High allergy risk, limit outdoor time',
-      };
-      setHealthHint(hints[riskLevel] || hints.Low);
-      
-      // Update pollen breakdown
-      setPollenBreakdown([
-        { name: 'Grass', value: response.grass || 120, color: 'bg-green-400 dark:bg-green-500' },
-        { name: 'Tree', value: response.tree || 85, color: 'bg-teal-400 dark:bg-teal-500' },
-        { name: 'Weed', value: response.weed || 115, color: 'bg-lime-400 dark:bg-lime-500' },
-      ]);
-      
-      // Update vegetation coverage
-      setVegetationPercent(response.vegetationIndex || 65);
-      
-      // Success - even if using fallback data
+
+      const parsedData = parsePollenResponse(response);
+
+      // Cache the successful response
+      setCachedData(cacheKey, parsedData);
+
+      // Batch all state updates together for performance (reduced renders)
       setIsLoading(false);
-      setHasError(false);
+      setPollenCount(parsedData.pollenCount);
+      setPollenLevel(parsedData.riskLevel);
+      setHealthHint(parsedData.healthHint);
+      setPollenBreakdown(parsedData.pollenBreakdown);
+      setVegetationPercent(parsedData.vegetationPercent);
+      setIsPollenUnavailable(parsedData.isPollenUnavailable);
+      setHasError(parsedData.hasError);
+
+      console.log('🌿 Pollen data fetched successfully');
     } catch (error) {
-      console.error('❌ Pollen Fetch Error:', error);
-      setHasError(true);
+      if (error.name !== 'AbortError') {
+        console.error('❌ Pollen Fetch Error:', error);
+        setHasError(true);
+      }
+    } finally {
+      clearTimeout(fetchTimeoutRef.current);
       setIsLoading(false);
     }
-  }, [location.lat, location.lon]);
+  }, [location, parsePollenResponse]);
 
-  // Fetch pollen data when location changes
+  // Fetch data on location change with optimized debounce
   useEffect(() => {
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return;
+    }
+
+    const fetchKey = generateCacheKey(lat, lon);
+    
+    if (lastAutoFetchKeyRef.current === fetchKey) {
+      return;
+    }
+    
+    lastAutoFetchKeyRef.current = fetchKey;
+
     const timer = setTimeout(() => {
       fetchPollenData();
-    }, 300); // Debounce rapid location changes
-    
-    return () => clearTimeout(timer);
-  }, [location, fetchPollenData]);
+    }, 300);
 
-  // Handle refresh
+    return () => clearTimeout(timer);
+  }, [location?.lat, location?.lon, fetchPollenData]);
+
+  // Handle refresh with debounce
   const handleRefresh = useCallback(async () => {
+    if (isRefreshing) return;
+    
     setIsRefreshing(true);
     try {
-      await fetchPollenData();
+      await fetchPollenData({ force: true });
     } catch (error) {
       console.error('Pollen data refresh failed:', error);
     } finally {
       setTimeout(() => setIsRefreshing(false), 1000);
     }
-  }, [fetchPollenData]);
+  }, [isRefreshing, fetchPollenData]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (fetchAbortControllerRef.current) {
+        fetchAbortControllerRef.current.abort();
+      }
+      if (fetchTimeoutRef.current) {
+        clearTimeout(fetchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Close menu on outside click
   useEffect(() => {
+    if (!isMenuOpen) return;
+
     const handleClickOutside = (e) => {
       if (menuRef.current && !menuRef.current.contains(e.target)) {
         setIsMenuOpen(false);
       }
     };
-    
-    if (isMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [isMenuOpen]);
 
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMenuOpen]);
 
   // Skeleton loading state
   if (isLoading) {
     return (
-      <div className={`rounded-2xl p-4 sm:p-6 shadow-lg transition-all duration-300 ${
-        isDarkMode
-          ? 'bg-slate-800 border border-slate-700'
-          : 'bg-white border border-gray-100'
-      }`} role="status" aria-label="Loading pollen information" aria-busy="true">
+      <div 
+        className={`rounded-2xl p-4 sm:p-6 shadow-lg transition-all duration-300 ${
+          isDarkMode
+            ? 'bg-slate-800 border border-slate-700'
+            : 'bg-white border border-gray-100'
+        }`} 
+        role="status" 
+        aria-label="Loading pollen information" 
+        aria-busy="true"
+      >
         <div className="animate-pulse space-y-4">
           <div className="flex justify-between">
             <div className="h-4 bg-gray-300 dark:bg-gray-600 rounded w-32"></div>
@@ -263,14 +435,15 @@ const PollenVegetationCard = ({
             <p className="text-sm opacity-90">Please try refreshing the data.</p>
             <button
               onClick={handleRefresh}
+              disabled={isRefreshing}
               className={`mt-3 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
                 isDarkMode
-                  ? 'bg-red-800/50 hover:bg-red-800'
-                  : 'bg-red-100 hover:bg-red-200'
+                  ? 'bg-red-800/50 hover:bg-red-800 disabled:opacity-50'
+                  : 'bg-red-100 hover:bg-red-200 disabled:opacity-50'
               }`}
               aria-label="Retry loading pollen data"
             >
-              Retry
+              {isRefreshing ? 'Retrying...' : 'Retry'}
             </button>
           </div>
         </div>
@@ -284,7 +457,7 @@ const PollenVegetationCard = ({
         isDarkMode
           ? 'bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700/60 hover:border-slate-600/80 backdrop-blur-sm'
           : 'bg-white border border-emerald-200/60 hover:border-emerald-300/80 backdrop-blur-sm'
-      } ${animated ? 'opacity-100' : 'opacity-0'}`}
+      } opacity-100`}
       style={{ animation: 'slideUp 0.5s ease-out' }}
       role="region"
       aria-label="Pollen and vegetation information"
@@ -300,6 +473,7 @@ const PollenVegetationCard = ({
         }
         .menu-enter { animation: slideIn 0.2s ease-out; }
       `}</style>
+
       {/* Header */}
       <div className={`flex items-center justify-between flex-shrink-0 px-4 sm:px-6 pt-4 sm:pt-6 pb-0 border-b ${
         isDarkMode ? 'border-slate-700/30' : 'border-emerald-200/30'
@@ -319,7 +493,8 @@ const PollenVegetationCard = ({
                 if (e.key === 'Escape') setIsMenuOpen(false);
                 if (e.key === 'Enter') setIsMenuOpen(!isMenuOpen);
               }}
-              className={`p-1.5 rounded-lg transition-all duration-150 hover:shadow-md group cursor-pointer ${
+              disabled={isRefreshing}
+              className={`p-1.5 rounded-lg transition-all duration-150 hover:shadow-md group cursor-pointer disabled:opacity-50 ${
                 isDarkMode
                   ? 'text-gray-400 hover:text-gray-200 hover:bg-slate-700/60'
                   : 'text-slate-600 hover:text-emerald-600 hover:bg-emerald-100'
@@ -333,18 +508,22 @@ const PollenVegetationCard = ({
             </button>
 
             {isMenuOpen && (
-              <div className={`absolute right-0 mt-2 w-48 rounded-lg shadow-2xl overflow-hidden z-50 transition-all duration-200 menu-enter backdrop-blur-md ${
-                isDarkMode
-                  ? 'bg-slate-700/95 border border-slate-600/70'
-                  : 'bg-white/95 border border-gray-200/70'
-              }`} role="menu">
+              <div 
+                className={`absolute right-0 mt-2 w-48 rounded-lg shadow-2xl overflow-hidden z-50 transition-all duration-200 menu-enter backdrop-blur-md ${
+                  isDarkMode
+                    ? 'bg-slate-700/95 border border-slate-600/70'
+                    : 'bg-white/95 border border-gray-200/70'
+                }`} 
+                role="menu"
+              >
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     handleRefresh();
                     setIsMenuOpen(false);
                   }}
-                  className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors ${
+                  disabled={isRefreshing}
+                  className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 ${
                     isDarkMode
                       ? 'text-gray-200 hover:bg-slate-600/50'
                       : 'text-slate-700 hover:bg-emerald-50'
@@ -352,7 +531,7 @@ const PollenVegetationCard = ({
                   aria-label="Refresh pollen data"
                 >
                   <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                  Refresh
+                  {isRefreshing ? 'Refreshing...' : 'Refresh'}
                 </button>
               </div>
             )}
@@ -369,11 +548,11 @@ const PollenVegetationCard = ({
               <div className="flex items-baseline justify-between">
                 <span className={`text-xs font-medium ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Pollen Count</span>
                 <span className={`text-xl sm:text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                  {pollenCount}
+                  {isPollenUnavailable ? 'UNV' : (pollenCount ?? '--')}
                   <span className={`text-xs font-normal ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} ml-1`}>grains/m³</span>
                 </span>
               </div>
-              <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>{healthHint || '✓ Good for outdoor activities'}</p>
+              <p className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>{healthHint || 'Live pollen data loaded'}</p>
             </div>
 
             {/* Status Badge */}
@@ -387,7 +566,9 @@ const PollenVegetationCard = ({
                 <span className={`text-xs font-medium ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Impact Level</span>
                 <div
                   className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold ${
-                    pollenLevel === 'High'
+                    isPollenUnavailable
+                      ? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                      : pollenLevel === 'High'
                       ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200'
                       : pollenLevel === 'Moderate'
                       ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-200'
@@ -395,23 +576,34 @@ const PollenVegetationCard = ({
                   }`}
                 >
                   <AlertCircle className="w-3 h-3" />
-                  <span>{pollenLevel}</span>
+                  <span>{isPollenUnavailable ? 'UNV' : pollenLevel}</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Right Side - Pollen Chart */}
-          <div className={`rounded-lg p-2 sm:p-2.5 border ${
+          <div className={`rounded-lg p-2 sm:p-2.5 border shadow-sm ${
             isDarkMode
-              ? 'bg-slate-800 border-slate-700'
-              : 'bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200'
+              ? 'bg-gradient-to-br from-slate-800/90 to-slate-900 border-slate-700/70'
+              : 'bg-gradient-to-br from-emerald-50/60 to-cyan-50/70 border-emerald-200/70'
           }`}>
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-1.5">
               <h4 className={`text-xs font-semibold flex items-center gap-1.5 ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
                 <Wind className={`w-3.5 h-3.5 ${isDarkMode ? 'text-blue-400' : 'text-blue-600'}`} />
                 Breakdown
               </h4>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                isPollenUnavailable
+                  ? isDarkMode
+                    ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                    : 'bg-slate-100 text-slate-700 border border-slate-300'
+                  : isDarkMode
+                    ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-700/40'
+                    : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+              }`}>
+                {isPollenUnavailable ? 'UNV' : 'LIVE'}
+              </span>
             </div>
             <PollenChart data={pollenBreakdown} isLoading={isLoading} />
           </div>
@@ -428,32 +620,21 @@ const PollenVegetationCard = ({
           </div>
 
           <ProgressBar
-            value={vegetationPercent}
+            value={hasVegetationData ? vegetationPercent : null}
             max={100}
             showLabel={true}
             className="mt-1"
           />
 
           {/* Vegetation Details */}
-          <div className="grid grid-cols-2 gap-1.5 pt-1">
+          <div className="grid grid-cols-1 gap-1.5 pt-1">
             <div className={`rounded-lg p-2 border ${
               isDarkMode
                 ? 'bg-emerald-900/20 border-emerald-800/50'
                 : 'bg-emerald-50 border-emerald-200'
             }`}>
               <span className={`text-xs font-medium block mb-0.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Healthy</span>
-              <span className={`text-base sm:text-lg font-bold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'}`}>{vegetationPercent}%</span>
-            </div>
-            <div className={`rounded-lg p-2 border ${
-              isDarkMode
-                ? 'bg-slate-800 border-slate-700'
-                : 'bg-slate-100 border-slate-200'
-            }`}>
-              <span className={`text-xs font-medium block mb-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>Trend</span>
-              <div className="flex items-center gap-1">
-                <TrendingUp className={`w-3.5 h-3.5 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`} />
-                <span className={`text-xs font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>Stable</span>
-              </div>
+              <span className={`text-base sm:text-lg font-bold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'}`}>{hasVegetationData ? `${vegetationPercent}%` : '--'}</span>
             </div>
           </div>
         </div>

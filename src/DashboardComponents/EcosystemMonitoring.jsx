@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Leaf, Trees, Globe, MoreHorizontal, TrendingUp, TrendingDown, Target, Activity } from 'lucide-react';
+import { EcosystemAPI } from '../api';
+import EcosystemHealthCalculate from './EcosystemHealthCalculate';
 
 /**
  * StatusBadge - Reusable status indicator component
@@ -291,48 +293,125 @@ const EcosystemMonitoringCard = ({
   vegetationIndex = 0.72,
   biodiversityScore = 78,
   forestCoverage = 65,
-  location = 'Conservation Area',
+  location = null,
   lastUpdated = 30,
   isLoading = false,
   onMenuClick = () => {},
   trends = { vegetation: 3, biodiversity: 2, forest: 1 },
   trendDirections = { vegetation: 'up', biodiversity: 'up', forest: 'up' },
   isDarkMode = false,
+  onHealthCalculated = () => {},
 }) => {
   const [animated] = useState(true);
+  const [liveMetrics, setLiveMetrics] = useState({
+    vegetationIndex,
+    biodiversityScore,
+    forestCoverage,
+    locationLabel: 'Conservation Area',
+    lastUpdated,
+  });
+  const [isLoadingLive, setIsLoadingLive] = useState(false);
+  const lastAutoFetchKeyRef = useRef(null);
+
+  useEffect(() => {
+    const lat = Number(location?.lat);
+    const lon = Number(location?.lon);
+    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return;
+    }
+
+    if (lastAutoFetchKeyRef.current === fetchKey) {
+      return;
+    }
+    lastAutoFetchKeyRef.current = fetchKey;
+
+    let cancelled = false;
+    let timeoutId = null;
+
+    const loadEcosystemMetrics = async () => {
+      setIsLoadingLive(true);
+      
+      // Hard timeout: Force loading state to clear after 6 seconds
+      timeoutId = setTimeout(() => {
+        if (!cancelled) {
+          console.warn('⏱️ Ecosystem data fetch timeout - clearing loading state');
+          setIsLoadingLive(false);
+        }
+      }, 6000);
+
+      try {
+        const liveData = await EcosystemAPI.get(lat, lon);
+        if (cancelled) return;
+
+        clearTimeout(timeoutId);
+        const nowIso = new Date().toISOString();
+        const timestamp = liveData?.timestamp || nowIso;
+        const updatedAgoMins = Math.max(1, Math.round((Date.now() - new Date(timestamp).getTime()) / 60000));
+
+        setLiveMetrics((prev) => ({
+          vegetationIndex: liveData?.vegetationIndex ?? prev.vegetationIndex,
+          biodiversityScore: liveData?.biodiversityScore ?? prev.biodiversityScore,
+          forestCoverage: liveData?.forestCoverage ?? prev.forestCoverage,
+          locationLabel: `Lat ${lat.toFixed(2)}, Lon ${lon.toFixed(2)}`,
+          lastUpdated: Number.isFinite(updatedAgoMins) ? updatedAgoMins : 1,
+        }));
+      } catch (error) {
+        if (!cancelled) {
+          clearTimeout(timeoutId);
+          console.warn('Ecosystem live metrics unavailable, using fallback values.', error);
+          setIsLoadingLive(false);
+        }
+      }
+    };
+
+    loadEcosystemMetrics();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [location?.lat, location?.lon]);
+
+  const displayVegetationIndex = liveMetrics.vegetationIndex;
+  const displayBiodiversityScore = liveMetrics.biodiversityScore;
+  const displayForestCoverage = liveMetrics.forestCoverage;
+  const displayLocation = liveMetrics.locationLabel;
+  const displayLastUpdated = liveMetrics.lastUpdated;
+  const actualLoading = isLoading || isLoadingLive;
 
   // Compute vegetation status
   const getVegetationStatus = useMemo(() => {
     return () => {
-      if (vegetationIndex < 0.3) return { status: 'Low vegetation', badge: 'low', info: 'Area needs restoration' };
-      if (vegetationIndex < 0.6) return { status: 'Moderate vegetation', badge: 'moderate', info: 'Fair ecosystem health' };
+      if (displayVegetationIndex < 0.3) return { status: 'Low vegetation', badge: 'low', info: 'Area needs restoration' };
+      if (displayVegetationIndex < 0.6) return { status: 'Moderate vegetation', badge: 'moderate', info: 'Fair ecosystem health' };
       return { status: 'High vegetation', badge: 'high', info: 'Thriving ecosystem' };
     };
-  }, [vegetationIndex])();
+  }, [displayVegetationIndex])();
 
   // Compute biodiversity status
   const getBiodiversityStatus = useMemo(() => {
     return () => {
-      if (biodiversityScore < 40) return { status: 'Low diversity', badge: 'critical', info: 'Species loss detected' };
-      if (biodiversityScore < 70) return { status: 'Moderate diversity', badge: 'moderate', info: 'Some species decline' };
+      if (displayBiodiversityScore < 40) return { status: 'Low diversity', badge: 'critical', info: 'Species loss detected' };
+      if (displayBiodiversityScore < 70) return { status: 'Moderate diversity', badge: 'moderate', info: 'Some species decline' };
       return { status: 'High diversity', badge: 'healthy', info: 'Rich species composition' };
     };
-  }, [biodiversityScore])();
+  }, [displayBiodiversityScore])();
 
   // Compute forest status
   const getForestStatus = useMemo(() => {
     return () => {
-      if (forestCoverage < 30) return { status: 'Low coverage', badge: 'low', info: 'Severe deforestation' };
-      if (forestCoverage < 60) return { status: 'Moderate coverage', badge: 'moderate', info: 'Moderate tree density' };
+      if (displayForestCoverage < 30) return { status: 'Low coverage', badge: 'low', info: 'Severe deforestation' };
+      if (displayForestCoverage < 60) return { status: 'Moderate coverage', badge: 'moderate', info: 'Moderate tree density' };
       return { status: 'High coverage', badge: 'high', info: 'Healthy forest area' };
     };
-  }, [forestCoverage])();
+  }, [displayForestCoverage])();
 
   const vegData = getVegetationStatus;
   const bioData = getBiodiversityStatus;
   const forestData = getForestStatus;
 
-  if (isLoading) {
+  if (actualLoading) {
     return (
       <div className={`rounded-2xl p-6 shadow-lg dark:shadow-xl border ${isDarkMode ? 'bg-slate-900 border-slate-700/60' : 'bg-white border-emerald-200/50'}`}>
         <div className="space-y-4">
@@ -376,7 +455,7 @@ const EcosystemMonitoringCard = ({
               </div>
               <div>
                 <h3 className={`text-xl font-bold tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Ecosystem Monitoring</h3>
-                <p className={`text-xs font-medium mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{location} • Updated {lastUpdated}m ago</p>
+                <p className={`text-xs font-medium mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{displayLocation} • Updated {displayLastUpdated}m ago</p>
               </div>
             </div>
           </div>
@@ -397,7 +476,7 @@ const EcosystemMonitoringCard = ({
           {/* Vegetation Index */}
           <div className="flex justify-center">
             <CircularProgress
-              value={vegetationIndex}
+              value={displayVegetationIndex}
               max={1}
               label="Vegetation Index (NDVI)"
               color="emerald"
@@ -407,7 +486,7 @@ const EcosystemMonitoringCard = ({
           {/* Biodiversity Score */}
           <div className="flex justify-center">
             <CircularProgress
-              value={biodiversityScore / 100}
+              value={displayBiodiversityScore / 100}
               max={1}
               label="Biodiversity Index"
               color="green"
@@ -417,7 +496,7 @@ const EcosystemMonitoringCard = ({
           {/* Forest Coverage */}
           <div className="flex justify-center">
             <CircularProgress
-              value={forestCoverage / 100}
+              value={displayForestCoverage / 100}
               max={1}
               label="Forest Coverage"
               color="teal"
@@ -447,7 +526,7 @@ const EcosystemMonitoringCard = ({
               </div>
               <div className="mb-3">
                 <span className={`text-3xl font-bold tracking-tight ${isDarkMode ? 'text-emerald-100' : 'text-emerald-900'}`}>
-                  {(vegetationIndex * 100).toFixed(0)}
+                  {(displayVegetationIndex * 100).toFixed(0)}
                 </span>
                 <p className={`text-xs font-semibold mt-2 ${isDarkMode ? 'text-emerald-200' : 'text-emerald-800'}`}>
                   {vegData.status}
@@ -484,7 +563,7 @@ const EcosystemMonitoringCard = ({
               </div>
               <div className="mb-3">
                 <span className={`text-3xl font-bold tracking-tight ${isDarkMode ? 'text-green-100' : 'text-green-900'}`}>
-                  {biodiversityScore}
+                  {displayBiodiversityScore}
                 </span>
                 <p className={`text-xs font-semibold mt-2 ${isDarkMode ? 'text-green-200' : 'text-green-800'}`}>
                   {bioData.status}
@@ -521,7 +600,7 @@ const EcosystemMonitoringCard = ({
               </div>
               <div className="mb-3">
                 <span className={`text-3xl font-bold tracking-tight ${isDarkMode ? 'text-teal-100' : 'text-teal-900'}`}>
-                  {forestCoverage}%
+                  {displayForestCoverage}%
                 </span>
                 <p className={`text-xs font-semibold mt-2 ${isDarkMode ? 'text-teal-200' : 'text-teal-800'}`}>
                   {forestData.status}
@@ -550,64 +629,11 @@ const EcosystemMonitoringCard = ({
 
         {/* Overall Health Indicator */}
         <div className={`mt-7 pt-7 border-t ${isDarkMode ? 'border-slate-700/40' : 'border-slate-200/80'}`}>
-          <div className={`rounded-2xl p-6 border-2 backdrop-blur-xl transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${isDarkMode ? 'bg-gradient-to-br from-emerald-900/25 via-slate-800/40 to-teal-900/20 border-emerald-700/40 hover:border-emerald-600/60' : 'bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/50 border-emerald-300/70 hover:border-emerald-400'}`}>
-            <div className="flex items-center justify-between gap-8">
-              <div className="flex-1">
-                <h5 className={`text-lg font-bold mb-3 tracking-tight ${isDarkMode ? 'text-white' : 'text-emerald-950'}`}>
-                  Overall Ecosystem Health
-                </h5>
-                <p className={`text-sm font-medium leading-relaxed ${isDarkMode ? 'text-slate-200/90' : 'text-emerald-900/90'}`}>
-                  {biodiversityScore > 75 && vegetationIndex > 0.65 && forestCoverage > 60
-                    ? '🌍 Excellent - Ecosystem is thriving with robust biodiversity and healthy vegetation coverage'
-                    : biodiversityScore > 50 && vegetationIndex > 0.4 && forestCoverage > 40
-                    ? '⚠️ Fair - Monitor ecosystem carefully and prioritize conservation efforts'
-                    : '🚨 Critical - Immediate restoration action is urgently needed'}
-                </p>
-              </div>
-              <div className="relative w-28 h-28 flex-shrink-0">
-                <svg className="w-full h-full" viewBox="0 0 100 100">
-                  {/* Background circle */}
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="42"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    className={isDarkMode ? 'text-slate-700/50' : 'text-emerald-200/60'}
-                  />
-                  {/* Progress circle with gradient */}
-                  <defs>
-                    <linearGradient id="healthGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor={isDarkMode ? '#10b981' : '#059669'} />
-                      <stop offset="50%" stopColor={isDarkMode ? '#14b8a6' : '#0d9488'} />
-                      <stop offset="100%" stopColor={isDarkMode ? '#06b6d4' : '#0891b2'} />
-                    </linearGradient>
-                  </defs>
-                  <circle
-                    cx="50"
-                    cy="50"
-                    r="42"
-                    fill="none"
-                    stroke="url(#healthGradient)"
-                    strokeWidth="3"
-                    strokeDasharray={`${((biodiversityScore + (vegetationIndex * 100) + forestCoverage) / 3) / 100 * 263.89} 263.89`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 50 50)"
-                    style={{ transition: 'stroke-dasharray 1s ease-out' }}
-                  />
-                </svg>
-                <div className="absolute inset-0 flex items-center justify-center flex-col">
-                  <span className={`text-2xl font-bold ${isDarkMode ? 'text-emerald-300' : 'text-emerald-700'}`}>
-                    {Math.round((biodiversityScore + (vegetationIndex * 100) + forestCoverage) / 3)}
-                  </span>
-                  <span className={`text-xs font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Score
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <EcosystemHealthCalculate
+            location={location}
+            isDarkMode={isDarkMode}
+            onHealthCalculated={onHealthCalculated}
+          />
         </div>
       </div>
 
