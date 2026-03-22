@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Droplets, AlertCircle, Waves, MoreHorizontal } from 'lucide-react';
 import { WaterAPI } from '../api';
 
@@ -150,7 +150,6 @@ const WaterQualityCard = ({
   const [isLoading, setIsLoading] = useState(false);
   const [hasLiveError, setHasLiveError] = useState(false);
   const [liveWaterData, setLiveWaterData] = useState(null);
-  const lastAutoFetchKeyRef = useRef(null);
 
   const cityMock = useMemo(() => {
     const lat = Number(location?.lat);
@@ -190,12 +189,6 @@ const WaterQualityCard = ({
       setIsLoading(false);
       return;
     }
-
-    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
-    if (lastAutoFetchKeyRef.current === fetchKey) {
-      return;
-    }
-    lastAutoFetchKeyRef.current = fetchKey;
 
     let cancelled = false;
 

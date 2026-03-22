@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Droplets, Thermometer, Leaf, AlertCircle, MoreHorizontal, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 import { SoilAPI } from '../api';
 
@@ -196,7 +196,6 @@ const SoilMonitoringCard = ({
   const [error, setError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const lastAutoFetchKeyRef = useRef(null);
 
   useEffect(() => {
     const lat = Number(location?.lat);
@@ -206,13 +205,7 @@ const SoilMonitoringCard = ({
       return;
     }
 
-    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
-
     const isManualRefresh = refreshKey > 0;
-    if (!isManualRefresh && lastAutoFetchKeyRef.current === fetchKey) {
-      return;
-    }
-    lastAutoFetchKeyRef.current = fetchKey;
 
     let cancelled = false;
     let timeoutId = null;

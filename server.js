@@ -21,6 +21,21 @@ const GBIF_BASE_URL = 'https://api.gbif.org/v1';
 console.log('🔑 API Key Status:', AMBEE_API_KEY ? '✅ Loaded' : '❌ Missing - check .env file');
 console.log('📍 Ambee Base URL:', AMBEE_BASE_URL);
 
+// Utility: Fetch with timeout
+const fetchWithTimeout = async (url, options = {}, timeoutMs = 9000) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    throw error;
+  }
+};
+
 // 💧 Water Quality Proxy
 app.get('/api/water', async (req, res) => {
   try {
@@ -324,51 +339,56 @@ app.get('/api/soil/temperature', async (req, res) => {
 });
 
 const fetchNasaNdvi = async (lat, lng) => {
-  const datesUrl = `${NASA_MODIS_BASE_URL}/MOD13Q1/dates?latitude=${lat}&longitude=${lng}`;
-  const datesResponse = await fetch(datesUrl);
-  if (!datesResponse.ok) {
-    throw new Error(`NASA MODIS dates request failed (${datesResponse.status})`);
+  try {
+    const datesUrl = `${NASA_MODIS_BASE_URL}/MOD13Q1/dates?latitude=${lat}&longitude=${lng}`;
+    const datesResponse = await fetchWithTimeout(datesUrl, {}, 5000);
+    if (!datesResponse.ok) {
+      throw new Error(`NASA MODIS dates request failed (${datesResponse.status})`);
+    }
+
+    const datesPayload = await datesResponse.json();
+    const latest = datesPayload?.dates?.[datesPayload?.dates?.length - 1];
+    const latestModisDate = latest?.modis_date;
+    if (!latestModisDate) {
+      throw new Error('NASA MODIS NDVI date unavailable for this location');
+    }
+
+    const subsetParams = new URLSearchParams({
+      latitude: String(lat),
+      longitude: String(lng),
+      band: '250m_16_days_NDVI',
+      startDate: latestModisDate,
+      endDate: latestModisDate,
+      kmAboveBelow: '0',
+      kmLeftRight: '0',
+    });
+
+    const subsetUrl = `${NASA_MODIS_BASE_URL}/MOD13Q1/subset?${subsetParams.toString()}`;
+    const subsetResponse = await fetchWithTimeout(subsetUrl, {}, 5000);
+    if (!subsetResponse.ok) {
+      throw new Error(`NASA MODIS subset request failed (${subsetResponse.status})`);
+    }
+
+    const subsetPayload = await subsetResponse.json();
+    const rawValue = Number(subsetPayload?.subset?.[0]?.data?.[0]);
+    const scaleFactor = Number(subsetPayload?.scale || 0.0001);
+    if (!Number.isFinite(rawValue) || rawValue === -3000) {
+      throw new Error('NASA MODIS NDVI value unavailable');
+    }
+
+    const ndvi = rawValue * scaleFactor;
+    const normalized = Math.max(0, Math.min(1, (ndvi + 1) / 2));
+
+    return {
+      ndvi: Math.round(ndvi * 1000) / 1000,
+      vegetationIndex: Math.round(normalized * 1000) / 1000,
+      timestamp: subsetPayload?.subset?.[0]?.calendar_date || null,
+      source: 'NASA EarthData MODIS NDVI',
+    };
+  } catch (error) {
+    console.error('❌ NASA NDVI fetch error:', error.message);
+    throw error;
   }
-
-  const datesPayload = await datesResponse.json();
-  const latest = datesPayload?.dates?.[datesPayload?.dates?.length - 1];
-  const latestModisDate = latest?.modis_date;
-  if (!latestModisDate) {
-    throw new Error('NASA MODIS NDVI date unavailable for this location');
-  }
-
-  const subsetParams = new URLSearchParams({
-    latitude: String(lat),
-    longitude: String(lng),
-    band: '250m_16_days_NDVI',
-    startDate: latestModisDate,
-    endDate: latestModisDate,
-    kmAboveBelow: '0',
-    kmLeftRight: '0',
-  });
-
-  const subsetUrl = `${NASA_MODIS_BASE_URL}/MOD13Q1/subset?${subsetParams.toString()}`;
-  const subsetResponse = await fetch(subsetUrl);
-  if (!subsetResponse.ok) {
-    throw new Error(`NASA MODIS subset request failed (${subsetResponse.status})`);
-  }
-
-  const subsetPayload = await subsetResponse.json();
-  const rawValue = Number(subsetPayload?.subset?.[0]?.data?.[0]);
-  const scaleFactor = Number(subsetPayload?.scale || 0.0001);
-  if (!Number.isFinite(rawValue) || rawValue === -3000) {
-    throw new Error('NASA MODIS NDVI value unavailable');
-  }
-
-  const ndvi = rawValue * scaleFactor;
-  const normalized = Math.max(0, Math.min(1, (ndvi + 1) / 2));
-
-  return {
-    ndvi: Math.round(ndvi * 1000) / 1000,
-    vegetationIndex: Math.round(normalized * 1000) / 1000,
-    timestamp: subsetPayload?.subset?.[0]?.calendar_date || null,
-    source: 'NASA EarthData MODIS NDVI',
-  };
 };
 
 const buildGbifGeometryWkt = (lat, lng, deltaDegrees) => {
@@ -392,7 +412,7 @@ const fetchGbifSample = async ({ lat, lng, deltaDegrees, kingdomKey = null, limi
   }
 
   const url = `${GBIF_BASE_URL}/occurrence/search?${params.toString()}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url, {}, 5000);
   if (!response.ok) {
     throw new Error(`GBIF occurrence request failed (${response.status})`);
   }
@@ -497,9 +517,18 @@ app.get('/api/ecosystem', async (req, res) => {
     console.log('🌐 Proxying ecosystem request:', { lat, lng });
 
     const [ndviResult, biodiversityResult, forestResult] = await Promise.allSettled([
-      fetchNasaNdvi(lat, lng),
-      fetchGbifBiodiversity(lat, lng),
-      fetchGbifForestCoverage(lat, lng),
+      Promise.race([
+        fetchNasaNdvi(lat, lng),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('NASA NDVI timeout')), 12000))
+      ]),
+      Promise.race([
+        fetchGbifBiodiversity(lat, lng),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('GBIF Biodiversity timeout')), 12000))
+      ]),
+      Promise.race([
+        fetchGbifForestCoverage(lat, lng),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('GBIF Forest timeout')), 12000))
+      ]),
     ]);
 
     const ndviData = ndviResult.status === 'fulfilled' ? ndviResult.value : null;
@@ -508,6 +537,11 @@ app.get('/api/ecosystem', async (req, res) => {
 
     const hasAnyData = ndviData || biodiversityData || forestData;
     if (!hasAnyData) {
+      console.error('❌ No ecosystem data available:', {
+        ndvi: ndviResult.status === 'rejected' ? ndviResult.reason?.message : 'no data',
+        biodiversity: biodiversityResult.status === 'rejected' ? biodiversityResult.reason?.message : 'no data',
+        forestCoverage: forestResult.status === 'rejected' ? forestResult.reason?.message : 'no data',
+      });
       return res.status(502).json({
         error: 'Failed to fetch ecosystem metrics',
         details: {

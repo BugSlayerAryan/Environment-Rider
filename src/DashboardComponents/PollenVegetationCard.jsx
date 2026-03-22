@@ -188,7 +188,6 @@ const PollenVegetationCard = ({
   const [healthHint, setHealthHint] = useState(null);
   const [isPollenUnavailable, setIsPollenUnavailable] = useState(false);
   
-  const lastAutoFetchKeyRef = useRef(null);
   const fetchAbortControllerRef = useRef(null);
   const fetchTimeoutRef = useRef(null);
   
@@ -387,14 +386,6 @@ const PollenVegetationCard = ({
       setIsPollenUnavailable(false);
       return;
     }
-
-    const fetchKey = generateCacheKey(lat, lon);
-    
-    if (lastAutoFetchKeyRef.current === fetchKey) {
-      return;
-    }
-    
-    lastAutoFetchKeyRef.current = fetchKey;
 
     const timer = setTimeout(() => {
       fetchPollenData();

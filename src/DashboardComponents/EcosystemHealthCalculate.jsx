@@ -45,16 +45,52 @@ const toStatus = (score) => {
   };
 };
 
+const MODULE_LABELS = {
+  weather: 'Weather',
+  aqi: 'Air Quality',
+  uv: 'UV',
+  pollen: 'Pollen',
+  soil: 'Soil',
+  water: 'Water',
+};
+
+const FIELD_LABELS = {
+  weather: {
+    temp: 'Weather: Temperature',
+    humidity: 'Weather: Humidity',
+    wind: 'Weather: Wind',
+  },
+  aqi: {
+    aqi: 'Air Quality: AQI',
+  },
+  uv: {
+    uvi: 'UV: UVI',
+  },
+  pollen: {
+    riskLevel: 'Pollen: Risk Level',
+  },
+  soil: {
+    ph: 'Soil: pH',
+    moisture: 'Soil: Moisture',
+    temperature: 'Soil: Temperature',
+  },
+  water: {
+    pollutionLevel: 'Water: Pollution Level',
+    ph: 'Water: pH',
+    dissolvedOxygen: 'Water: Dissolved Oxygen',
+  },
+};
+
 const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealthCalculated = () => {} }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const onHealthCalculatedRef = useRef(onHealthCalculated);
-  const lastAutoFetchKeyRef = useRef(null);
   const [result, setResult] = useState({
     score: 0,
     status: toStatus(0),
     moduleScores: {},
     unavailableModules: [],
+    excludedData: [],
   });
 
   useEffect(() => {
@@ -64,8 +100,6 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
   useEffect(() => {
     const lat = Number(location?.lat);
     const lon = Number(location?.lon);
-    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
-
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
       setError('Location is unavailable.');
       setLoading(false);
@@ -74,16 +108,19 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
         status: 'Unavailable',
         moduleScores: {},
         unavailableModules: ['weather', 'aqi', 'uv', 'pollen', 'soil', 'water'],
+        excludedData: [
+          'Weather',
+          'Air Quality',
+          'UV',
+          'Pollen',
+          'Soil',
+          'Water',
+        ],
         hasLiveData: false,
         updatedAt: new Date().toISOString(),
       });
       return;
     }
-
-    if (lastAutoFetchKeyRef.current === fetchKey) {
-      return;
-    }
-    lastAutoFetchKeyRef.current = fetchKey;
 
     let cancelled = false;
 
@@ -92,7 +129,7 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
       setError(null);
 
       try {
-        // FAST APPROACH: Use Promise.race with timeout per API (5s max)
+        // Use a bounded timeout so slow providers can still contribute to the score.
         // Show results as they come in, but don't wait forever
         const fetchWithFastTimeout = (promise, timeoutMs = 5000) => 
           Promise.race([
@@ -103,12 +140,12 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
           ]).catch(() => null);
 
         const [weatherRes, aqiRes, uvRes, pollenRes, soilRes, waterRes] = await Promise.allSettled([
-          fetchWithFastTimeout(WeatherAPI.get(lat, lon), 5000),
-          fetchWithFastTimeout(AQIAPI.get(lat, lon), 5000),
-          fetchWithFastTimeout(UVAPI.get(lat, lon), 5000),
-          fetchWithFastTimeout(PollenAPI.get(lat, lon), 5000),
-          fetchWithFastTimeout(SoilAPI.get(lat, lon), 5000),
-          fetchWithFastTimeout(WaterAPI.get(lat, lon), 5000),
+          fetchWithFastTimeout(WeatherAPI.get(lat, lon), 9000),
+          fetchWithFastTimeout(AQIAPI.get(lat, lon), 9000),
+          fetchWithFastTimeout(UVAPI.get(lat, lon), 9000),
+          fetchWithFastTimeout(PollenAPI.get(lat, lon), 9000),
+          fetchWithFastTimeout(SoilAPI.get(lat, lon), 9000),
+          fetchWithFastTimeout(WaterAPI.get(lat, lon), 9000),
         ]);
 
         if (cancelled) return;
@@ -120,11 +157,19 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
         const soil = soilRes.status === 'fulfilled' ? soilRes.value : null;
         const water = waterRes.status === 'fulfilled' ? waterRes.value : null;
 
-        const weatherSubscores = [
-          scoreFromRange(Number(weather?.temp), 18, 30, 12),
-          scoreFromRange(Number(weather?.humidity), 35, 70, 25),
-          scoreFromRange(Number(weather?.wind), 0, 10, 8),
-        ].filter((v) => Number.isFinite(v));
+        const excludedData = [];
+
+        const weatherMetricMap = {
+          temp: scoreFromRange(Number(weather?.temp), 18, 30, 12),
+          humidity: scoreFromRange(Number(weather?.humidity), 35, 70, 25),
+          wind: scoreFromRange(Number(weather?.wind), 0, 10, 8),
+        };
+        const weatherSubscores = Object.entries(weatherMetricMap)
+          .filter(([, value]) => Number.isFinite(value))
+          .map(([, value]) => value);
+        Object.entries(weatherMetricMap).forEach(([field, value]) => {
+          if (!Number.isFinite(value)) excludedData.push(FIELD_LABELS.weather[field]);
+        });
         const weatherScore = weatherSubscores.length
           ? Math.round(weatherSubscores.reduce((a, b) => a + b, 0) / weatherSubscores.length)
           : null;
@@ -133,31 +178,46 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
         const aqiScore = Number.isFinite(aqiValue)
           ? Math.round(clamp(100 - (aqiValue * 0.32), 0, 100))
           : null;
+        if (!Number.isFinite(aqiScore)) excludedData.push(FIELD_LABELS.aqi.aqi);
 
         const uvValue = Number(uv?.uvi);
         const uvScore = Number.isFinite(uvValue)
           ? Math.round(clamp(100 - Math.max(0, uvValue - 2) * 12, 0, 100))
           : null;
+        if (!Number.isFinite(uvScore)) excludedData.push(FIELD_LABELS.uv.uvi);
 
         const pollenRisk = String(pollen?.riskLevel || '').toLowerCase();
         const pollenScore = pollenRisk === 'low' ? 90 : pollenRisk === 'moderate' ? 60 : pollenRisk === 'high' ? 30 : null;
+        if (!Number.isFinite(pollenScore)) excludedData.push(FIELD_LABELS.pollen.riskLevel);
 
-        const soilSubscores = [
-          scoreFromRange(Number(soil?.ph), 6.0, 7.8, 1.0),
-          scoreFromRange(Number(soil?.moisture), 30, 70, 25),
-          scoreFromRange(Number(soil?.temperature), 15, 32, 12),
-        ].filter((v) => Number.isFinite(v));
+        const soilMetricMap = {
+          ph: scoreFromRange(Number(soil?.ph), 6.0, 7.8, 1.0),
+          moisture: scoreFromRange(Number(soil?.moisture), 30, 70, 25),
+          temperature: scoreFromRange(Number(soil?.temperature), 15, 32, 12),
+        };
+        const soilSubscores = Object.entries(soilMetricMap)
+          .filter(([, value]) => Number.isFinite(value))
+          .map(([, value]) => value);
+        Object.entries(soilMetricMap).forEach(([field, value]) => {
+          if (!Number.isFinite(value)) excludedData.push(FIELD_LABELS.soil[field]);
+        });
         const soilScore = soilSubscores.length
           ? Math.round(soilSubscores.reduce((a, b) => a + b, 0) / soilSubscores.length)
           : null;
 
         const waterPollution = String(water?.pollutionLevel || '').toLowerCase();
         const pollutionScore = waterPollution === 'low' ? 90 : waterPollution === 'moderate' ? 60 : waterPollution === 'high' ? 30 : null;
-        const waterSubscores = [
-          pollutionScore,
-          scoreFromRange(Number(water?.ph), 6.5, 8.5, 1.0),
-          scoreFromRange(Number(water?.dissolvedOxygen), 6, 10, 3),
-        ].filter((v) => Number.isFinite(v));
+        const waterMetricMap = {
+          pollutionLevel: pollutionScore,
+          ph: scoreFromRange(Number(water?.ph), 6.5, 8.5, 1.0),
+          dissolvedOxygen: scoreFromRange(Number(water?.dissolvedOxygen), 6, 10, 3),
+        };
+        const waterSubscores = Object.entries(waterMetricMap)
+          .filter(([, value]) => Number.isFinite(value))
+          .map(([, value]) => value);
+        Object.entries(waterMetricMap).forEach(([field, value]) => {
+          if (!Number.isFinite(value)) excludedData.push(FIELD_LABELS.water[field]);
+        });
         const waterScore = waterSubscores.length
           ? Math.round(waterSubscores.reduce((a, b) => a + b, 0) / waterSubscores.length)
           : null;
@@ -201,6 +261,7 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
           status: toStatus(score),
           moduleScores,
           unavailableModules,
+          excludedData,
         };
 
         setResult(nextResult);
@@ -209,6 +270,7 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
           status: nextResult.status.label,
           moduleScores,
           unavailableModules,
+          excludedData,
           hasLiveData: activeWeight > 0,
           updatedAt: activeWeight > 0 ? new Date().toISOString() : null,
         });
@@ -220,6 +282,14 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
             status: 'Unavailable',
             moduleScores: {},
             unavailableModules: ['weather', 'aqi', 'uv', 'pollen', 'soil', 'water'],
+            excludedData: [
+              'Weather',
+              'Air Quality',
+              'UV',
+              'Pollen',
+              'Soil',
+              'Water',
+            ],
             hasLiveData: false,
             updatedAt: new Date().toISOString(),
           });
@@ -240,6 +310,16 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
 
   const titleColor = useMemo(() => (isDarkMode ? 'text-white' : 'text-emerald-950'), [isDarkMode]);
   const bodyColor = useMemo(() => (isDarkMode ? 'text-slate-200/90' : 'text-emerald-900/90'), [isDarkMode]);
+  const unavailableLabels = useMemo(
+    () => result.unavailableModules.map((key) => MODULE_LABELS[key] || key),
+    [result.unavailableModules]
+  );
+  const bannerExcludedData = useMemo(() => {
+    const fromFields = Array.isArray(result.excludedData) ? result.excludedData : [];
+    const fromModules = unavailableLabels;
+    const merged = [...fromFields, ...fromModules];
+    return Array.from(new Set(merged));
+  }, [result.excludedData, unavailableLabels]);
 
   if (loading) {
     return (
@@ -273,10 +353,19 @@ const EcosystemHealthCalculate = ({ location = null, isDarkMode = false, onHealt
               : '🌍 Excellent - Ecosystem is thriving with robust environmental stability'}
           </p>
           <p className={`text-xs mt-2 ${bodyColor}`}>{result.status.message}</p>
-          {result.unavailableModules.length > 0 && (
-            <p className={`text-xs mt-2 ${isDarkMode ? 'text-amber-300/90' : 'text-amber-700'}`}>
-              Missing modules: {result.unavailableModules.join(', ')}
-            </p>
+          {bannerExcludedData.length > 0 && (
+            <div
+              className={`mt-3 rounded-xl border px-3 py-2 text-xs font-medium ${
+                isDarkMode
+                  ? 'border-amber-700/50 bg-amber-900/20 text-amber-200'
+                  : 'border-amber-300 bg-amber-50 text-amber-800'
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              <p className="font-semibold">Excluded from calculation due to unavailable data:</p>
+              <p className="mt-1">{bannerExcludedData.join(', ')}</p>
+            </div>
           )}
         </div>
 

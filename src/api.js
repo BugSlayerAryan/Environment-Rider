@@ -742,7 +742,7 @@ export const EcosystemAPI = {
       lat,
       lon,
       () => fetchWithRetry(async () => {
-      const response = await fetchWithTimeout(`/api/ecosystem?lat=${lat}&lng=${lon}`);
+      const response = await fetchWithTimeout(`/api/ecosystem?lat=${lat}&lng=${lon}`, { timeout: 12000 });
 
       console.log('🌍 [EcosystemAPI] Server response:', response);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Leaf, Trees, Globe, MoreHorizontal, TrendingUp, TrendingDown, Target, Activity, RefreshCw } from 'lucide-react';
 import { EcosystemAPI } from '../api';
 import EcosystemHealthCalculate from './EcosystemHealthCalculate';
@@ -280,21 +280,16 @@ const MetricItem = ({ icon: Icon, label, value, unit, status, statusBadge, color
  * EcosystemMonitoringCard - Premium Ecosystem Monitoring Dashboard Component
  * 
  * @param {Object} props
- * @param {number} props.vegetationIndex - NDVI value (0-1)
- * @param {number} props.biodiversityScore - Biodiversity score (0-100)
- * @param {number} props.forestCoverage - Forest coverage percentage (0-100)
- * @param {string} props.location - Location label
- * @param {number} props.lastUpdated - Minutes since last update
+ * @param {string} props.location - Location object {lat, lon}
  * @param {boolean} props.isLoading - Loading state
  * @param {function} props.onMenuClick - Menu action handler
  * @param {Object} props.trends - Trend data
+ * @param {Object} props.trendDirections - Trend direction data
+ * @param {boolean} props.isDarkMode - Dark mode flag
+ * @param {function} props.onHealthCalculated - Health callback
  */
 const EcosystemMonitoringCard = ({
-  vegetationIndex = null,
-  biodiversityScore = null,
-  forestCoverage = null,
   location = null,
-  lastUpdated = null,
   isLoading = false,
   onMenuClick = () => {},
   trends = { vegetation: 0, biodiversity: 0, forest: 0 },
@@ -304,29 +299,27 @@ const EcosystemMonitoringCard = ({
 }) => {
   const [animated] = useState(true);
   const [liveMetrics, setLiveMetrics] = useState({
-    vegetationIndex: vegetationIndex,
-    biodiversityScore: biodiversityScore,
-    forestCoverage: forestCoverage,
+    vegetationIndex: null,
+    biodiversityScore: null,
+    forestCoverage: null,
     locationLabel: null,
-    lastUpdated: 0,
+    lastUpdated: null,
   });
-  const [isLoadingLive, setIsLoadingLive] = useState(false);
+  const [isLoadingLive, setIsLoadingLive] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
-  const lastAutoFetchKeyRef = useRef(null);
 
   useEffect(() => {
     const lat = Number(location?.lat);
     const lon = Number(location?.lon);
-    const fetchKey = `${lat.toFixed(6)},${lon.toFixed(6)}`;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      return;
+      console.warn('⚠️ Invalid location for ecosystem data:', { lat, lon, location });
+      const invalidLocationTimer = setTimeout(() => {
+        setIsLoadingLive(false);
+      }, 0);
+      return () => clearTimeout(invalidLocationTimer);
     }
 
     const isManualRefresh = refreshKey > 0;
-    if (!isManualRefresh && lastAutoFetchKeyRef.current === fetchKey) {
-      return;
-    }
-    lastAutoFetchKeyRef.current = fetchKey;
 
     let cancelled = false;
     let timeoutId = null;
@@ -334,15 +327,16 @@ const EcosystemMonitoringCard = ({
     const loadEcosystemMetrics = async () => {
       setIsLoadingLive(true);
       
-      // Hard timeout: Force loading state to clear after 6 seconds
+      // Hard timeout: Force loading state to clear after 8 seconds
       timeoutId = setTimeout(() => {
         if (!cancelled) {
           console.warn('⏱️ Ecosystem data fetch timeout - clearing loading state');
           setIsLoadingLive(false);
         }
-      }, 6000);
+      }, 8000);
 
       try {
+        console.log('🌍 [EcosystemMonitoring] Fetching live data from NASA MODIS (NDVI), GBIF (Biodiversity), GBIF (Forest)...');
         const liveData = await EcosystemAPI.get(lat, lon, { force: isManualRefresh });
         if (cancelled) return;
 
@@ -350,9 +344,11 @@ const EcosystemMonitoringCard = ({
         
         console.log('🌍 [EcosystemAPI] Raw response:', {
           vegetationIndex: liveData?.vegetationIndex,
+          ndvi: liveData?.ndvi,
           biodiversityScore: liveData?.biodiversityScore,
           forestCoverage: liveData?.forestCoverage,
           timestamp: liveData?.timestamp,
+          source: liveData?.source,
           unavailable: liveData?.unavailable,
         });
 
@@ -360,7 +356,7 @@ const EcosystemMonitoringCard = ({
         const timestamp = liveData?.timestamp || nowIso;
         const updatedAgoMins = Math.max(1, Math.round((Date.now() - new Date(timestamp).getTime()) / 60000));
 
-        // Ensure all values are properly typed numbers
+        // Use live API values - no fallback to static data
         const processedMetrics = {
           vegetationIndex: Number.isFinite(liveData?.vegetationIndex) ? liveData.vegetationIndex : null,
           biodiversityScore: Number.isFinite(liveData?.biodiversityScore) ? liveData.biodiversityScore : null,
@@ -369,14 +365,15 @@ const EcosystemMonitoringCard = ({
           lastUpdated: Number.isFinite(updatedAgoMins) ? updatedAgoMins : 1,
         };
 
-        console.log('🌍 [EcosystemMonitoring] Processed metrics:', processedMetrics);
+        console.log('🌍 [EcosystemMonitoring] Processed live API metrics:', processedMetrics);
+        console.log('🌍 [Data Sources]:', liveData?.source);
 
         setLiveMetrics(processedMetrics);
         setIsLoadingLive(false);
       } catch (error) {
         if (!cancelled) {
           clearTimeout(timeoutId);
-          console.error('❌ Ecosystem live metrics unavailable:', error);
+          console.error('❌ Ecosystem live metrics error:', error);
           setIsLoadingLive(false);
         }
       }
@@ -388,7 +385,7 @@ const EcosystemMonitoringCard = ({
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [location?.lat, location?.lon, refreshKey]);
+  }, [location, refreshKey]);
 
   const displayVegetationIndex = liveMetrics.vegetationIndex;
   const displayBiodiversityScore = liveMetrics.biodiversityScore;
