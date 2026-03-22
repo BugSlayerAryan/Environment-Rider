@@ -585,6 +585,9 @@ app.get('/api/ecosystem', async (req, res) => {
   }
 });
 
+// Serve static files from dist folder (built frontend)
+app.use(express.static('dist'));
+
 const PORT = process.env.VITE_PROXY_PORT || 3001;
 const HOST = process.env.VITE_PROXY_HOST || '127.0.0.1';
 
